@@ -1,4 +1,4 @@
-# Face Guardian Toolkit
+# Face Recognition
 
 End-to-end face security stack organised into three focused systems:
 
@@ -57,6 +57,7 @@ Common options: `--detector-thr`, identity threshold `-th`, spoof threshold `--s
 - BlazeFace alignment now focuses on the inner facial landmarks (eyes, nose, mouth) so profiles stay stable even when ears leave the frame.
 - DeePixBiS loads via the modern `weights=` argument while remaining compatible with the original checkpoint.
 - Each sub-package exposes its own demos and utilities, but everything can be orchestrated through `main.py` for a full pipeline run.
+
 
 
 
