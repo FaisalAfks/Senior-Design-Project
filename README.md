@@ -56,7 +56,7 @@ pip install -r requirements.txt
 - **DeePixBiS fine-tuning template:** `python DeePixBis/Training/train.py --train-csv ... --val-csv ...`
 - **Legacy unified demo:** `python pipeline_demo.py --source 0` (original pipeline mode)
 
-`main.py` loads Jetson-friendly defaults (CUDA + nvargus) but still exposes thresholds, guidance, and camera overrides—run `python main.py --help` if you need to tweak them.
+`main.py` now defaults to CPU execution and standard OpenCV video capture—run `python main.py --help` to adjust thresholds, guidance settings, or input sources.
 
 ## Notes
 - BlazeFace notebooks, weights, and demos are grouped under `BlazeFace/` to match the upstream project naming.
