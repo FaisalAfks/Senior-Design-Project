@@ -20,17 +20,14 @@ if str(ROOT) not in sys.path:
 from BlazeFace import BlazeFaceService, Detection
 from DeePixBis import DeePixBiSService
 from MobileFaceNet import MobileFaceNetService, RecognitionResult
-from utils import (
-    draw_detection_labels,
-    resolve_device,
-    run_guidance_session,
-)
+from utils import draw_detection_labels, open_capture, resolve_device, run_guidance_session
 
 DEFAULT_WEIGHTS = ROOT / "MobileFaceNet" / "Weights" / "MobileFace_Net"
 DEFAULT_FACEBANK = ROOT / "facebank"
 DEFAULT_SPOOF_WEIGHTS = ROOT / "DeePixBis" / "Weights" / "DeePixBiS.pth"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".wmv"}
+GUIDANCE_MIN_BOX = 224
 
 
 @dataclass
@@ -77,16 +74,30 @@ def parse_args() -> argparse.Namespace:
                         help="skip DeePixBiS anti-spoofing")
     parser.add_argument("--guidance", action="store_true",
                         help="run the face alignment guide before processing")
-    parser.add_argument("--guidance-circle-radius", type=int, default=0,
-                        help="radius in pixels for the guidance circle (0 = auto)")
+    parser.add_argument("--guidance-box-size", type=int, default=0,
+                        help="edge length in pixels for the guidance square (0 = auto)")
     parser.add_argument("--guidance-center-tolerance", type=float, default=0.25,
-                        help="fraction of the radius tolerated for centering")
+                        help="fraction of the square half-side tolerated for centering")
     parser.add_argument("--guidance-size-tolerance", type=float, default=0.15,
-                        help="fractional tolerance for face size vs circle")
+                        help="fractional tolerance for face size vs square")
     parser.add_argument("--guidance-rotation-thr", type=float, default=7.0,
                         help="maximum allowed head tilt in degrees during guidance")
     parser.add_argument("--guidance-hold-frames", type=int, default=15,
                         help="number of consecutive aligned frames before guidance succeeds")
+    parser.add_argument("--camera-backend", choices=["auto", "opencv", "gstreamer"], default="auto",
+                        help="backend to use when opening a camera index (auto tries Jetson defaults)")
+    parser.add_argument("--camera-width", type=int, default=1280,
+                        help="desired capture width for camera indices (ignored for files)")
+    parser.add_argument("--camera-height", type=int, default=720,
+                        help="desired capture height for camera indices (ignored for files)")
+    parser.add_argument("--camera-fps", type=float, default=30.0,
+                        help="desired capture FPS for camera indices (ignored for files)")
+    parser.add_argument("--camera-flip", type=int, default=0,
+                        help="nvargus flip-method to use with the Jetson GStreamer pipeline")
+    parser.add_argument("--gstreamer-pipeline", default=None,
+                        help="custom GStreamer pipeline string (overrides the auto-generated nvargus pipeline)")
+    parser.add_argument("--camera-sensor-mode", type=int, default=4,
+                        help="nvargus sensor-mode for Jetson CSI cameras")
     return parser.parse_args()
 
 
@@ -251,7 +262,16 @@ def run_video_mode(
     args: argparse.Namespace,
 ) -> None:
     detector, recogniser, spoiler = services
-    cap = cv2.VideoCapture(source)
+    cap = open_capture(
+        source,
+        backend=args.camera_backend,
+        width=args.camera_width,
+        height=args.camera_height,
+        fps=args.camera_fps,
+        flip_method=args.camera_flip,
+        gstreamer_pipeline=args.gstreamer_pipeline,
+        sensor_mode=args.camera_sensor_mode,
+    )
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open source: {args.source}")
 
@@ -318,11 +338,19 @@ def main() -> None:
             guidance_success = run_guidance_session(
                 args.source,
                 device=device,
-                circle_radius=args.guidance_circle_radius,
+                box_size=args.guidance_box_size,
                 center_tolerance=args.guidance_center_tolerance,
                 size_tolerance=args.guidance_size_tolerance,
                 rotation_thr=args.guidance_rotation_thr,
                 hold_frames=args.guidance_hold_frames,
+                camera_backend=args.camera_backend,
+                camera_width=args.camera_width,
+                camera_height=args.camera_height,
+                camera_fps=args.camera_fps,
+                camera_flip=args.camera_flip,
+                gstreamer_pipeline=args.gstreamer_pipeline,
+                min_box_size=GUIDANCE_MIN_BOX,
+                sensor_mode=args.camera_sensor_mode,
             )
             if not guidance_success:
                 print("Face alignment was not confirmed. Exiting without running the pipeline.")

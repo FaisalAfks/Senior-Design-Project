@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import time
 from datetime import datetime, timezone
@@ -23,6 +22,8 @@ from DeePixBis import DeePixBiSService
 from MobileFaceNet import MobileFaceNetService
 from utils import (
     FaceObservation,
+    DEFAULT_CAMERA_CONFIG,
+    CameraConfig,
     aggregate_observations,
     append_attendance_log,
     compose_final_display,
@@ -31,30 +32,29 @@ from utils import (
     evaluate_frame,
     resolve_device,
     select_best_detection,
+    open_capture,
 )
 
 DEFAULT_WEIGHTS = ROOT / "MobileFaceNet" / "Weights" / "MobileFace_Net"
 DEFAULT_FACEBANK = ROOT / "facebank"
 DEFAULT_SPOOF_WEIGHTS = ROOT / "DeePixBis" / "Weights" / "DeePixBiS.pth"
 DEFAULT_ATTENDANCE_LOG = ROOT / "attendance_results.jsonl"
-GUIDANCE_RADIUS_SCALE = 0.20  # base fraction of frame for typical close-up
-MAX_WINDOW_WIDTH = 640
-MAX_WINDOW_HEIGHT = 640
+GUIDANCE_BOX_SCALE = 0.40  # base fraction of the shortest frame side for typical close-up
+WINDOW_WIDTH_LIMIT = 960
+WINDOW_HEIGHT_LIMIT = 720
 # Minimum effective face sizes (px) across the pipeline
 BLAZEFACE_MIN_FACE = 64
 MOBILEFACENET_INPUT = 112
 DEEPIX_TARGET_SIZE = 224
-DEEPIX_CROP_EXPAND = 0.15
-DEEPIX_REQUIRED_FACE = int(round(DEEPIX_TARGET_SIZE / (1 + 2 * DEEPIX_CROP_EXPAND)))  # ≈173
-GUIDANCE_MIN_DIAMETER = max(BLAZEFACE_MIN_FACE, MOBILEFACENET_INPUT, DEEPIX_REQUIRED_FACE)
+GUIDANCE_MIN_SIDE = max(BLAZEFACE_MIN_FACE, MOBILEFACENET_INPUT, DEEPIX_TARGET_SIZE)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Align face, verify identity, and log attendance.")
     parser.add_argument("--source", default="0",
                         help="camera index (e.g. 0) or path to a video file")
-    parser.add_argument("--device", default="cpu",
-                        help="torch device to run on (e.g. cpu, cuda, cuda:0)")
+    parser.add_argument("--device", default="auto",
+                        help="torch device to run on (e.g. auto, cpu, cuda, cuda:0)")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS),
                         help="path to MobileFaceNet weights")
     parser.add_argument("--facebank", default=str(DEFAULT_FACEBANK),
@@ -73,21 +73,59 @@ def parse_args() -> argparse.Namespace:
                         help="minimum BlazeFace confidence required to keep detections")
     parser.add_argument("--spoof-thr", type=float, default=0.9,
                         help="minimum DeePixBiS score to label a face as real")
-    parser.add_argument("--guidance-circle-radius", type=int, default=0,
-                        help="radius in pixels for the guidance circle (0 = auto)")
-    parser.add_argument("--guidance-center-tolerance", type=float, default=0.25,
-                        help="fraction of the radius tolerated for centering during guidance")
-    parser.add_argument("--guidance-size-tolerance", type=float, default=0.15,
-                        help="fractional tolerance for face size vs circle during guidance")
-    parser.add_argument("--guidance-rotation-thr", type=float, default=7.0,
-                        help="maximum allowed head tilt in degrees during guidance")
-    parser.add_argument("--guidance-hold-frames", type=int, default=15,
-                        help="number of consecutive aligned frames before verification begins")
     parser.add_argument("--evaluation-duration", type=float, default=1.0,
                         help="duration (seconds) to capture frames for verification")
     parser.add_argument("--attendance-log", default=str(DEFAULT_ATTENDANCE_LOG),
                         help="path to append attendance results (JSON lines)")
+
+    parser.add_argument("--guidance-box-size", type=int, default=0,
+                        help="edge length in pixels for the guidance square (0 = auto)")
+    parser.add_argument("--guidance-center-tolerance", type=float, default=0.25,
+                        help="fraction of the square half-side tolerated for centering during guidance")
+    parser.add_argument("--guidance-size-tolerance", type=float, default=0.15,
+                        help="fractional tolerance for face size vs square during guidance")
+    parser.add_argument("--guidance-rotation-thr", type=float, default=7.0,
+                        help="maximum allowed head tilt in degrees during guidance")
+    parser.add_argument("--guidance-hold-frames", type=int, default=15,
+                        help="number of consecutive aligned frames before verification begins")
+
+    cam_defaults = DEFAULT_CAMERA_CONFIG
+    parser.add_argument("--camera-backend", choices=["auto", "opencv", "gstreamer"],
+                        default=cam_defaults.backend,
+                        help="backend to use when opening a camera index")
+    parser.add_argument("--camera-width", type=int, default=cam_defaults.width,
+                        help="desired capture width for camera indices")
+    parser.add_argument("--camera-height", type=int, default=cam_defaults.height,
+                        help="desired capture height for camera indices")
+    parser.add_argument("--camera-fps", type=float, default=cam_defaults.fps,
+                        help="desired capture FPS for camera indices")
+    parser.add_argument("--camera-flip", type=int, default=cam_defaults.flip_method,
+                        help="nvargus flip-method to use with the Jetson GStreamer pipeline")
+    parser.add_argument("--camera-sensor-mode", type=int,
+                        default=cam_defaults.sensor_mode if cam_defaults.sensor_mode is not None else 0,
+                        help="nvargus sensor-mode for Jetson CSI cameras (0 = auto)")
+    parser.add_argument("--gstreamer-pipeline", default=cam_defaults.gstreamer_pipeline,
+                        help="custom GStreamer pipeline string (overrides the auto-generated nvargus pipeline)")
     return parser.parse_args()
+
+
+def resolve_execution_device(device_name: str) -> torch.device:
+    name = (device_name or "auto").strip().lower()
+    if not name or name == "auto":
+        for candidate in ("cuda", "cuda:0", "cpu"):
+            try:
+                return resolve_device(candidate)
+            except (RuntimeError, ValueError):
+                continue
+        raise RuntimeError("Unable to resolve an appropriate torch device.")
+
+    try:
+        return resolve_device(name)
+    except (RuntimeError, ValueError) as ex:
+        if name != "cpu":
+            print(f"Warning: {ex}. Falling back to CPU.")
+            return resolve_device("cpu")
+        raise
 
 
 def build_services(args: argparse.Namespace, device: torch.device):
@@ -117,8 +155,6 @@ def run_guidance_phase(
 ) -> bool:
     consecutive_good = 0
     window_resized = False
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
     while True:
         ok, frame = capture.read()
         if not ok:
@@ -126,21 +162,22 @@ def run_guidance_phase(
 
         height, width = frame.shape[:2]
         min_dim = min(height, width)
-        min_required_radius = math.ceil(GUIDANCE_MIN_DIAMETER / 2)
-        auto_radius = max(min_required_radius, int(min_dim * GUIDANCE_RADIUS_SCALE))
-        if args.guidance_circle_radius > 0:
-            radius = max(min_required_radius, args.guidance_circle_radius)
+        min_required_side = GUIDANCE_MIN_SIDE
+        auto_side = max(min_required_side, int(min_dim * GUIDANCE_BOX_SCALE))
+        if args.guidance_box_size > 0:
+            side = max(min_required_side, args.guidance_box_size)
         else:
-            radius = auto_radius
-        max_radius = max(20, min_dim // 2 - 10)
-        radius = min(radius, max_radius)
-        if radius <= 0:
-            radius = max(20, min_required_radius)
-        circle_center = (width // 2, height // 2)
+            side = auto_side
+        max_side = max(min_required_side, min_dim - 20)
+        side = min(side, max_side)
+        if side % 2 != 0:
+            side = max(min_required_side, side - 1)
+        half_side = max(20, side // 2)
+        box_center = (width // 2, height // 2)
 
         if allow_resize and not window_resized:
-            target_w = min(width, MAX_WINDOW_WIDTH)
-            target_h = min(height, MAX_WINDOW_HEIGHT)
+            target_w = min(width, WINDOW_WIDTH_LIMIT)
+            target_h = min(height, WINDOW_HEIGHT_LIMIT)
             cv2.resizeWindow(window_name, target_w, target_h)
             window_resized = True
 
@@ -150,8 +187,8 @@ def run_guidance_phase(
         if detection is not None:
             assessment = evaluate_alignment(
                 detection,
-                circle_center,
-                radius,
+                box_center,
+                half_side,
                 center_tolerance_ratio=args.guidance_center_tolerance,
                 size_tolerance_ratio=args.guidance_size_tolerance,
                 rotation_threshold=args.guidance_rotation_thr,
@@ -162,17 +199,17 @@ def run_guidance_phase(
 
         display = draw_guidance_overlay(
             frame,
-            circle_center=circle_center,
-            radius=radius,
+            box_center=box_center,
+            half_side=half_side,
             detection=detection,
             assessment=assessment,
             show_messages=False,
         )
         instruction_lines: List[Tuple[str, Tuple[int, int, int], float]] = []
-        instruction_lines.append(("Align your face within the circle", (255, 255, 255), 0.8))
+        instruction_lines.append(("Align your face within the square", (255, 255, 255), 0.8))
 
         if detection is None:
-            instruction_lines.append(("Face not detected – center yourself", (0, 0, 255), 0.7))
+            instruction_lines.append(("Face not detected, center yourself", (0, 0, 255), 0.7))
             instruction_lines.append(("Look toward the camera", (0, 0, 255), 0.7))
         elif assessment is not None:
             if assessment.is_aligned:
@@ -212,7 +249,7 @@ def run_verification_phase(
 ) -> Tuple[List[FaceObservation], Optional[np.ndarray], float]:
     observations: List[FaceObservation] = []
     last_frame: Optional[np.ndarray] = None
-    duration_limit = min(max(args.evaluation_duration, 0.0), 1.0)
+    duration_limit = max(0.0, min(args.evaluation_duration, 5.0))
     start_time = time.perf_counter()
 
     while True:
@@ -258,25 +295,33 @@ def run_verification_phase(
 
 def main() -> None:
     args = parse_args()
-    device = resolve_device(args.device)
+    raw_source = args.source
+    source = int(raw_source) if isinstance(raw_source, str) and raw_source.isdigit() else raw_source
 
-    source = int(args.source) if isinstance(args.source, str) and args.source.isdigit() else args.source
+    device = resolve_execution_device(args.device)
 
-    if isinstance(source, int):
-        # Prefer DirectShow on Windows webcams to avoid MSMF stream selection warnings.
-        capture = cv2.VideoCapture(source, cv2.CAP_DSHOW)
-        if not capture.isOpened():
-            capture.release()
-            capture = cv2.VideoCapture(source)
-    else:
-        capture = cv2.VideoCapture(source)
+    sensor_mode = None if args.camera_sensor_mode in (None, 0) else args.camera_sensor_mode
+    camera_config = CameraConfig(
+        backend=args.camera_backend,
+        width=args.camera_width,
+        height=args.camera_height,
+        fps=args.camera_fps,
+        flip_method=args.camera_flip,
+        sensor_mode=sensor_mode,
+        gstreamer_pipeline=args.gstreamer_pipeline,
+    )
+
+    capture = open_capture(source, config=camera_config)
     if not capture.isOpened():
-        raise RuntimeError(f"Unable to open source: {args.source}")
+        raise RuntimeError(f"Unable to open source: {raw_source}")
 
     detector, recogniser, spoof_service = build_services(args, device)
 
     window_name = "Face Verification"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    window_w = min(WINDOW_WIDTH_LIMIT, max(320, args.camera_width))
+    window_h = min(WINDOW_HEIGHT_LIMIT, max(240, args.camera_height))
+    cv2.resizeWindow(window_name, window_w, window_h)
 
     attending = True
     auto_resize_applied = False
@@ -305,7 +350,7 @@ def main() -> None:
         timestamp = datetime.now(timezone.utc).isoformat()
         log_entry = {
             "timestamp": timestamp,
-            "source": args.source,
+            "source": raw_source,
             "recognized": summary["recognized"],
             "identity": summary["identity"],
             "avg_identity_score": summary["avg_identity_score"],
@@ -318,7 +363,9 @@ def main() -> None:
         append_attendance_log(Path(args.attendance_log), log_entry)
 
         if last_frame is None:
-            last_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or args.camera_height
+            frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or args.camera_width
+            last_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
 
         last_observation = observations[-1] if observations else None
         final_display = compose_final_display(

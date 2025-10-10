@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 from BlazeFace import BlazeFaceService, Detection
+from .camera import open_capture
 
 
 @dataclass
@@ -26,8 +27,8 @@ class AlignmentAssessment:
 
 def evaluate_alignment(
     detection: Detection,
-    circle_center: Tuple[float, float],
-    radius: float,
+    box_center: Tuple[float, float],
+    half_side: float,
     *,
     center_tolerance_ratio: float,
     size_tolerance_ratio: float,
@@ -35,9 +36,9 @@ def evaluate_alignment(
 ) -> AlignmentAssessment:
     x1, y1, x2, y2 = detection.bbox
     face_center = np.array([(x1 + x2) * 0.5, (y1 + y2) * 0.5], dtype=np.float32)
-    circle_center = np.array(circle_center, dtype=np.float32)
-    delta = face_center - circle_center
-    tolerance_px = center_tolerance_ratio * radius
+    box_center = np.array(box_center, dtype=np.float32)
+    delta = face_center - box_center
+    tolerance_px = center_tolerance_ratio * half_side
 
     messages: List[str] = []
     centered = True
@@ -55,7 +56,7 @@ def evaluate_alignment(
         centered = False
 
     face_size = max((x2 - x1), (y2 - y1))
-    target_size = radius * 2.0
+    target_size = half_side * 2.0
     size_tolerance = size_tolerance_ratio * target_size
     sized = True
     if face_size < target_size - size_tolerance:
@@ -98,8 +99,8 @@ def select_best_detection(detections: Sequence[Detection]) -> Detection:
 def draw_guidance_overlay(
     frame: np.ndarray,
     *,
-    circle_center: Tuple[int, int],
-    radius: int,
+    box_center: Tuple[int, int],
+    half_side: int,
     detection: Optional[Detection],
     assessment: Optional[AlignmentAssessment],
     show_messages: bool = True,
@@ -107,7 +108,16 @@ def draw_guidance_overlay(
     display = frame.copy()
     height, width = display.shape[:2]
 
-    cv2.circle(display, circle_center, radius, (0, 255, 0), 4)
+    cx, cy = box_center
+    half = max(1, half_side)
+    left = max(0, cx - half)
+    right = min(width - 1, cx + half)
+    top = max(0, cy - half)
+    bottom = min(height - 1, cy + half)
+
+    box_color = (0, 255, 0)
+    thickness = 4
+    cv2.rectangle(display, (left, top), (right, bottom), box_color, thickness, cv2.LINE_AA)
 
     if detection is None or assessment is None:
         if show_messages:
@@ -134,17 +144,35 @@ def run_guidance_session(
     source,
     *,
     device,
-    circle_radius: int = 0,
+    box_size: int = 0,
     center_tolerance: float = 0.25,
     size_tolerance: float = 0.15,
     rotation_thr: float = 7.0,
     hold_frames: int = 15,
     window_name: str = "Face Guidance",
+    camera_backend: str = "auto",
+    camera_width: int = 1280,
+    camera_height: int = 720,
+    camera_fps: float = 30.0,
+    camera_flip: int = 0,
+    gstreamer_pipeline: Optional[str] = None,
+    sensor_mode: Optional[int] = None,
+    min_box_size: int = 224,
+    box_scale: float = 0.40,
 ) -> bool:
     if isinstance(source, str) and source.isdigit():
         source = int(source)
 
-    capture = cv2.VideoCapture(source)
+    capture = open_capture(
+        source,
+        backend=camera_backend,
+        width=camera_width,
+        height=camera_height,
+        fps=camera_fps,
+        flip_method=camera_flip,
+        gstreamer_pipeline=gstreamer_pipeline,
+        sensor_mode=sensor_mode,
+    )
     if not capture.isOpened():
         raise RuntimeError(f"Could not open source: {source}")
 
@@ -159,9 +187,19 @@ def run_guidance_session(
                 break
 
             height, width = frame.shape[:2]
-            auto_radius = int(min(height, width) * 0.28)
-            radius = circle_radius if circle_radius > 0 else auto_radius
-            circle_center = (width // 2, height // 2)
+            min_dim = min(height, width)
+            min_required_side = max(20, min_box_size)
+            auto_side = max(min_required_side, int(min_dim * box_scale))
+            if box_size > 0:
+                side = max(min_required_side, box_size)
+            else:
+                side = auto_side
+            max_side = max(min_required_side, min_dim - 20)
+            side = min(side, max_side)
+            if side % 2 != 0:
+                side -= 1
+            half_side = max(20, side // 2)
+            box_center = (width // 2, height // 2)
 
             detections = detector_service.detect(frame)
             detection = select_best_detection(detections) if detections else None
@@ -170,8 +208,8 @@ def run_guidance_session(
             if detection is not None:
                 assessment = evaluate_alignment(
                     detection,
-                    circle_center,
-                    radius,
+                    box_center,
+                    half_side,
                     center_tolerance_ratio=center_tolerance,
                     size_tolerance_ratio=size_tolerance,
                     rotation_threshold=rotation_thr,
@@ -182,8 +220,8 @@ def run_guidance_session(
 
             display = draw_guidance_overlay(
                 frame,
-                circle_center=circle_center,
-                radius=radius,
+                box_center=box_center,
+                half_side=half_side,
                 detection=detection,
                 assessment=assessment,
             )

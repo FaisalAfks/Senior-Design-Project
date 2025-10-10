@@ -56,7 +56,7 @@ pip install -r requirements.txt
 - **DeePixBiS fine-tuning template:** `python DeePixBis/Training/train.py --train-csv ... --val-csv ...`
 - **Legacy unified demo:** `python pipeline_demo.py --source 0` (original pipeline mode)
 
-Common `main.py` options: `--detector-thr`, identity threshold `-th`, spoof threshold `--spoof-thr`, `--tta` for flip augmentation, `--update` to rebuild facebank, and `--disable-spoof` to skip liveness when needed.
+`main.py` loads Jetson-friendly defaults (CUDA + nvargus) but still exposes thresholds, guidance, and camera overrides—run `python main.py --help` if you need to tweak them.
 
 ## Notes
 - BlazeFace notebooks, weights, and demos are grouped under `BlazeFace/` to match the upstream project naming.

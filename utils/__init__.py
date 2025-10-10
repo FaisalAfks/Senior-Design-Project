@@ -1,4 +1,11 @@
 from .device import resolve_device
+from .camera import (
+    CameraConfig,
+    DEFAULT_CAMERA_CONFIG,
+    build_nvargus_pipeline,
+    detect_jetson,
+    open_capture,
+)
 from .cv import draw_detection_labels
 from .face_guidance import (
     AlignmentAssessment,
@@ -28,5 +35,10 @@ __all__ = [
     'aggregate_observations',
     'append_attendance_log',
     'compose_final_display',
+    'open_capture',
+    'build_nvargus_pipeline',
+    'detect_jetson',
+    'CameraConfig',
+    'DEFAULT_CAMERA_CONFIG',
 ]
 
