@@ -25,6 +25,18 @@ def parse_main_args(
         help="Camera index (e.g. 0) or path to a video file.",
     )
     parser.add_argument(
+        "--camera-width",
+        type=int,
+        default=0,
+        help="Preferred camera capture width in pixels (0 = leave camera default).",
+    )
+    parser.add_argument(
+        "--camera-height",
+        type=int,
+        default=0,
+        help="Preferred camera capture height in pixels (0 = leave camera default).",
+    )
+    parser.add_argument(
         "--device",
         default="cpu",
         help="Torch device to run on (e.g. cpu, cuda, cuda:0).",
@@ -74,7 +86,7 @@ def parse_main_args(
     parser.add_argument(
         "--spoof-thr",
         type=float,
-        default=0.9,
+        default=0.7,
         help="Minimum DeePixBiS score to label a face as real.",
     )
     parser.add_argument(
