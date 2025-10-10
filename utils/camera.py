@@ -137,7 +137,11 @@ def _open_csi_capture(
         flip_method=flip_method,
     )
     pipeline = _apply_sensor_properties(pipeline, sensor_id, params)
-    return cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    capture = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    if capture.isOpened():
+        return capture
+    capture.release()
+    return None
 
 
 def open_video_source(
@@ -150,12 +154,18 @@ def open_video_source(
     if _is_linux():
         if isinstance(source, str) and source.startswith(CSI_PREFIX):
             sensor_id, params = _parse_csi_source(source)
-            return _open_csi_capture(sensor_id=sensor_id, params=params, frame_size=frame_size, fps=fps)
-        if isinstance(source, int):
-            capture = _open_csi_capture(sensor_id=source, params={}, frame_size=frame_size, fps=fps)
-            if capture.isOpened():
+            capture = _open_csi_capture(sensor_id=sensor_id, params=params, frame_size=frame_size, fps=fps)
+            if capture is not None:
                 return capture
-            capture.release()
+        else:
+            try:
+                sensor_index = int(source) if isinstance(source, str) else int(source)
+            except (TypeError, ValueError):
+                sensor_index = None
+            if sensor_index is not None:
+                capture = _open_csi_capture(sensor_id=sensor_index, params={}, frame_size=frame_size, fps=fps)
+                if capture is not None:
+                    return capture
 
     capture = cv2.VideoCapture(source)
     if not capture.isOpened():
