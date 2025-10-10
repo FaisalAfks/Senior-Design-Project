@@ -1,38 +1,44 @@
-# Face Recognition
+# Face Guardian Toolkit
 
-End-to-end face security stack organised into three focused systems:
+End-to-end face security stack organised into three focused systems that mirror the original research repositories:
 
-- `detection/` - BlazeFace model and helpers
-- `recognition/` - MobileFaceNet, facebank tools, and recognition demos
-- `antispoof/` - DeePixBiS model, dataset loaders, and liveness demos
+- `BlazeFace/` – face detection, alignment helpers, demos, and notebooks
+- `MobileFaceNet/` – recognition backbone, facebank utilities, tutorials, and demos
+- `DeePixBis/` – anti-spoof model, unified training helpers, and evaluation scripts
 
-The top-level `main.py` script unifies the stack, wiring up detection, recognition, and anti-spoofing in a single CLI.
+The top-level `main.py` script now talks to each project through small service abstractions, so the legacy `face_pipeline.py` is no longer needed.
 
 ## Layout
 ```
-main.py                # unified CLI (image/video/webcam)
-face_guardian_pipeline.py       # orchestrates detection + recognition + spoof
+main.py                        # unified CLI (image/video/webcam) using the new services
+facebank/                      # enrolled identities stay in the project root
 
-dataset/
-    `- facebank/                # enrolled identities for recognition
+BlazeFace/
+    |- api.py                  # service wrapper around BlazeFaceDetector
+    |- detector.py             # detector wrapper + alignment helpers
+    |- models/blazeface.py     # BlazeFace network definition
+    |- Training/               # fine-tuning template & assets
+    |- Testing/                # demos + sample images
+    |- Weights/                # pretrained weights + anchors
+    `- Notebooks/              # upstream notebooks (anchors, inference, conversion)
 
-detection/
-    |- blazeface.py             # BlazeFace network definition
-    |- blazeface_detector.py    # detector wrapper + alignment helpers (eyes/nose/mouth)
-    `- blazeface_assets/        # pretrained weights + anchors
+MobileFaceNet/
+    |- api.py                  # MobileFaceNetService + facebank integration
+    |- models/mobilefacenet.py # backbone, ArcFace head, facebank helpers
+    |- Training/               # upstream training scripts & datasets helpers
+    |- Testing/                # demos (camera/video/MTCNN, face capture, evaluation)
+    |- Weights/                # pretrained MobileFaceNet checkpoint
+    `- Notebooks/              # tutorial notebooks from the original repo
 
-recognition/
-    |- mobilefacenet.py         # MobileFaceNet backbone + facebank + landmark utilities
-    |- take_picture.py          # capture facebank crops
-    `- weights/                 # MobileFaceNet pretrained weights
+DeePixBis/
+    |- api.py                  # DeePixBiSService for batched inference
+    |- core.py                 # model, dataset, loss, metrics, trainer (consolidated)
+    |- Training/train.py       # CLI training entry point
+    |- Testing/test.py         # CLI evaluation entry point
+    |- Weights/                # DeePixBiS pretrained checkpoint
+    `- data/                   # CSV metadata + sample assets
 
-antispoof/
-    |- antispoof_model.py       # DeePixBiS (DenseNet-161 encoder)
-    |- antispoof_dataset.py / antispoof_loss.py / antispoof_metrics.py / antispoof_trainer.py
-    |- antispoof_train.py / antispoof_test.py
-    `- weights/                 # DeePixBiS pretrained weights
-
-requirements.txt                # consolidated dependency list
+requirements.txt               # consolidated dependency list
 ```
 
 ## Setup
@@ -43,22 +49,19 @@ pip install -r requirements.txt
 ```
 
 ## Key scripts
-- **Unified guard:** `python main.py --source 0`
-- **Facebank capture:** `python recognition/take_picture.py -n Alice`
-- **Anti-spoof webcam only:** `python antispoof/antispoof_test.py`
-- **Update embeddings after adding images:**
-  ```bash
-  python main.py --source 0 --update
-  ```
+- **Identity gate (alignment + 1s verification):** `python main.py --source 0`
+- **Facebank capture:** `python MobileFaceNet/Testing/take_picture.py -n Alice`
+- **Rebuild facebank from CLI:** `python MobileFaceNet/utils/facebank.py --rebuild`
+- **Anti-spoof eval only:** `python DeePixBis/Testing/test.py --csv DeePixBis/data/val_metadata.csv --weights DeePixBis/Weights/DeePixBiS.pth`
+- **DeePixBiS fine-tuning template:** `python DeePixBis/Training/train.py --train-csv ... --val-csv ...`
+- **Legacy unified demo:** `python pipeline_demo.py --source 0` (original pipeline mode)
 
-Common options: `--detector-thr`, identity threshold `-th`, spoof threshold `--spoof-thr`, `--tta` for flip augmentation, and `--disable-spoof` to skip liveness when needed.
+Common `main.py` options: `--detector-thr`, identity threshold `-th`, spoof threshold `--spoof-thr`, `--tta` for flip augmentation, `--update` to rebuild facebank, and `--disable-spoof` to skip liveness when needed.
 
 ## Notes
-- BlazeFace alignment now focuses on the inner facial landmarks (eyes, nose, mouth) so profiles stay stable even when ears leave the frame.
-- DeePixBiS loads via the modern `weights=` argument while remaining compatible with the original checkpoint.
-- Each sub-package exposes its own demos and utilities, but everything can be orchestrated through `main.py` for a full pipeline run.
-
-
-
-
+- BlazeFace notebooks, weights, and demos are grouped under `BlazeFace/` to match the upstream project naming.
+- MobileFaceNet scripts now resolve imports via the package layout; demos load weights and facebank from the new paths automatically.
+- DeePixBiS logic (dataset, loss, metrics, trainer) is consolidated into `core.py`, reducing script sprawl while keeping CLI entry points for training and testing.
+- The `facebank/` directory remains at the project root so previously enrolled identities continue to work.
+- Running `main.py` captures ~1 second of verified frames after alignment and appends the decision to `attendance_results.jsonl` for downstream attendance tooling.
 
