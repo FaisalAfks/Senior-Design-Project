@@ -1,0 +1,121 @@
+"""Command-line argument builders for project entry points."""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+
+def parse_main_args(
+    *,
+    default_weights: Path,
+    default_facebank: Path,
+    default_spoof_weights: Path,
+    default_attendance_log: Path,
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Face verification with optional alignment guidance.")
+    parser.add_argument(
+        "--mode",
+        choices=["guided", "direct"],
+        default="guided",
+        help="Choose 'guided' to require alignment guidance before verification or 'direct' to capture immediately.",
+    )
+    parser.add_argument(
+        "--source",
+        default="0",
+        help="Camera index (e.g. 0) or path to a video file.",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Torch device to run on (e.g. cpu, cuda, cuda:0).",
+    )
+    parser.add_argument(
+        "--weights",
+        default=str(default_weights),
+        help="Path to MobileFaceNet weights.",
+    )
+    parser.add_argument(
+        "--facebank",
+        default=str(default_facebank),
+        help="Path to facebank directory.",
+    )
+    parser.add_argument(
+        "--update-facebank",
+        action="store_true",
+        help="Rebuild the facebank before running verification.",
+    )
+    parser.add_argument(
+        "--tta",
+        action="store_true",
+        help="Enable flip test-time augmentation for recognition embeddings.",
+    )
+    parser.add_argument(
+        "--identity-thr",
+        type=float,
+        default=70.0,
+        help="Identity acceptance threshold on the 0-100 score scale.",
+    )
+    parser.add_argument(
+        "--detector-thr",
+        type=float,
+        default=0.7,
+        help="Minimum BlazeFace confidence required to keep detections.",
+    )
+    parser.add_argument(
+        "--spoof-weights",
+        default=str(default_spoof_weights),
+        help="Path to DeePixBiS weights.",
+    )
+    parser.add_argument(
+        "--disable-spoof",
+        action="store_true",
+        help="Skip DeePixBiS anti-spoofing during verification.",
+    )
+    parser.add_argument(
+        "--spoof-thr",
+        type=float,
+        default=0.9,
+        help="Minimum DeePixBiS score to label a face as real.",
+    )
+    parser.add_argument(
+        "--evaluation-duration",
+        type=float,
+        default=1.0,
+        help="Duration (seconds) to capture frames for verification.",
+    )
+    parser.add_argument(
+        "--attendance-log",
+        default=str(default_attendance_log),
+        help="Path to append attendance results (JSON lines).",
+    )
+    parser.add_argument(
+        "--guidance-box-size",
+        type=int,
+        default=0,
+        help="Edge length in pixels for the guidance square (0 = auto).",
+    )
+    parser.add_argument(
+        "--guidance-center-tolerance",
+        type=float,
+        default=0.25,
+        help="Fraction of the square half-side tolerated for centering during guidance.",
+    )
+    parser.add_argument(
+        "--guidance-size-tolerance",
+        type=float,
+        default=0.15,
+        help="Fractional tolerance for face size vs square during guidance.",
+    )
+    parser.add_argument(
+        "--guidance-rotation-thr",
+        type=float,
+        default=7.0,
+        help="Maximum allowed head tilt in degrees during guidance.",
+    )
+    parser.add_argument(
+        "--guidance-hold-frames",
+        type=int,
+        default=15,
+        help="Number of consecutive aligned frames before verification begins.",
+    )
+    return parser.parse_args()
