@@ -27,13 +27,13 @@ def parse_main_args(
     parser.add_argument(
         "--camera-width",
         type=int,
-        default=0,
+        default=1280,
         help="Preferred camera capture width in pixels (0 = leave camera default).",
     )
     parser.add_argument(
         "--camera-height",
         type=int,
-        default=0,
+        default=720,
         help="Preferred camera capture height in pixels (0 = leave camera default).",
     )
     parser.add_argument(
@@ -54,7 +54,7 @@ def parse_main_args(
     parser.add_argument(
         "--update-facebank",
         action="store_true",
-        help="Rebuild the facebank before running verification.",
+        help="Rebuild the facebank before running verification (disable with --no-update-facebank).",
     )
     parser.add_argument(
         "--tta",
@@ -64,8 +64,8 @@ def parse_main_args(
     parser.add_argument(
         "--identity-thr",
         type=float,
-        default=70.0,
-        help="Identity acceptance threshold on the 0-100 score scale.",
+        default=0.7,
+        help="Identity acceptance threshold on the 0-1 score scale.",
     )
     parser.add_argument(
         "--detector-thr",
@@ -86,7 +86,7 @@ def parse_main_args(
     parser.add_argument(
         "--spoof-thr",
         type=float,
-        default=0.7,
+        default=0.9,
         help="Minimum DeePixBiS score to label a face as real.",
     )
     parser.add_argument(
@@ -109,25 +109,25 @@ def parse_main_args(
     parser.add_argument(
         "--guidance-center-tolerance",
         type=float,
-        default=0.25,
+        default=0.2,
         help="Fraction of the square half-side tolerated for centering during guidance.",
     )
     parser.add_argument(
         "--guidance-size-tolerance",
         type=float,
-        default=0.15,
+        default=0.2,
         help="Fractional tolerance for face size vs square during guidance.",
     )
     parser.add_argument(
         "--guidance-rotation-thr",
         type=float,
-        default=7.0,
+        default=15,
         help="Maximum allowed head tilt in degrees during guidance.",
     )
     parser.add_argument(
         "--guidance-hold-frames",
         type=int,
-        default=15,
+        default=10,
         help="Number of consecutive aligned frames before verification begins.",
     )
     return parser.parse_args()

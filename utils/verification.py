@@ -116,14 +116,28 @@ def compose_final_display(
 
     detail_lines = [
         f"Identity: {summary['identity']}",
-        f"Number of frames: {summary['frames_with_detections']}",
+        f"Frames analysed: {summary['frames_with_detections']}",
     ]
+
     if summary["avg_identity_score"] is not None:
-        detail_lines.append(f"Avg identity score: {summary['avg_identity_score']:.1f}")
+        identity_pct = summary["avg_identity_score"] * 100.0
+        detail_lines.append(f"Avg identity score: {identity_pct:.1f}%")
     else:
         detail_lines.append("Avg identity score: --")
-    if show_spoof_score and summary["avg_spoof_score"] is not None:
-        detail_lines.append(f"Avg spoof score: {summary['avg_spoof_score']:.2f}")
+
+    if show_spoof_score:
+        if summary["avg_spoof_score"] is not None:
+            spoof_pct = summary["avg_spoof_score"] * 100.0
+            if summary.get("is_real") is True:
+                spoof_status = "REAL"
+            elif summary.get("is_real") is False:
+                spoof_status = "SPOOF"
+            else:
+                spoof_status = "UNKNOWN"
+            detail_lines.append(f"Avg spoof score: {spoof_pct:.1f}% ({spoof_status})")
+        else:
+            detail_lines.append("Avg spoof score: --")
+
     duration = summary.get("capture_duration")
     if duration is not None:
         detail_lines.append(f"Capture duration: {duration:.2f}s")
@@ -194,9 +208,10 @@ def run_verification_phase(
         )
         cv2.putText(overlay, f"Number of frames: {len(observations)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         if avg_identity is not None:
+            identity_pct = avg_identity * 100.0
             cv2.putText(
                 overlay,
-                f"Avg identity: {avg_identity:.1f}",
+                f"Avg identity: {identity_pct:.1f}%",
                 (20, 130),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -204,9 +219,14 @@ def run_verification_phase(
                 2,
             )
         if avg_spoof is not None:
+            spoof_pct = avg_spoof * 100.0
+            if avg_spoof >= spoof_threshold:
+                spoof_label = "REAL"
+            else:
+                spoof_label = "SPOOF"
             cv2.putText(
                 overlay,
-                f"Avg spoof: {avg_spoof:.2f}",
+                f"Avg spoof: {spoof_pct:.1f}% ({spoof_label})",
                 (20, 160),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
