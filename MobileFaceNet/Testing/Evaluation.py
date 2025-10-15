@@ -110,8 +110,7 @@ def evaluation_10_fold(featureL, featureR, dataset, method = 'l2_distance'):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Face_Detection_Evaluation')
     parser.add_argument('--dataset', type=str, default='LFW', help='Select the dataset to evaluate, LFW, CFP-FP, AgeDB-30')
-    parser.add_argument('--method', type=str, default='l2_distance', 
-                        help='methold to calculate feature similarity, l2_distance, cos_distance')
+    parser.add_argument('--method', type=str, default='l2_distance', help='methold to calculate feature similarity, l2_distance, cos_distance')
     parser.add_argument('--flip', type=str, default=True, help='if flip the image with time augmentation')
     args = parser.parse_args()
     

@@ -30,7 +30,7 @@ class SessionRunner:
         capture: cv2.VideoCapture,
         detector: BlazeFaceService,
         recogniser: MobileFaceNetService,
-        spoof_service: Optional[DeePixBisService],
+        spoof_service: Optional[DeePixBiSService],
         args,
         *,
         window_name: str,

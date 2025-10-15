@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 
 import cv2
 import numpy as np
 import torch
 
-from BlazeFace.detector import BlazeFaceDetector, Detection
+from BlazeFace.detector import BlazeFaceDetector
 from MobileFaceNet.models.mobilefacenet import (
     MobileFaceNet,
     l2_norm,
@@ -36,7 +36,7 @@ class MobileFaceNetService:
         *,
         detector: Optional[BlazeFaceDetector] = None,
         device: Optional[torch.device] = None,
-        recognition_threshold: float = 60.0,
+        recognition_threshold: float = 0.7,
         tta: bool = False,
         refresh_facebank: bool = False,
     ) -> None:
@@ -57,6 +57,9 @@ class MobileFaceNetService:
 
         self.detector = detector or BlazeFaceDetector()
         self.tta = tta
+        if recognition_threshold > 1.0:
+            recognition_threshold = recognition_threshold / 100.0
+        recognition_threshold = float(np.clip(recognition_threshold, 0.0, 1.0))
         self.recognition_threshold = recognition_threshold
 
         self._rec_mean = torch.tensor([0.5, 0.5, 0.5], device=self.device).view(1, 3, 1, 1)
@@ -106,12 +109,11 @@ class MobileFaceNetService:
             dist = torch.clamp(dist, min=0.0)
 
             min_vals, min_idx = torch.min(dist, dim=1)
-            scores = torch.clamp(min_vals * -80 + 156, 0, 100)
-            threshold = (self.recognition_threshold - 156) / (-80)
+            scores = torch.clamp(-0.8 * min_vals + 1.56, 0.0, 1.0)
 
         results: List[RecognitionResult] = []
         for value, idx, score in zip(min_vals, min_idx, scores):
-            recognized = bool(value <= threshold)
+            recognized = bool(score >= self.recognition_threshold)
             name = "Unknown"
             if recognized and idx + 1 < len(self.facebank_names):
                 name = self.facebank_names[idx + 1]
@@ -137,4 +139,3 @@ class MobileFaceNetService:
         )
         self.facebank_embeddings = embeddings.to(self.device)
         self.facebank_names = list(names)
-

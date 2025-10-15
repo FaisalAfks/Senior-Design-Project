@@ -9,7 +9,6 @@ face alignment
 
 import numpy as np
 import cv2
-import torch
 import sys
 sys.path.append("..")
 
@@ -59,7 +58,7 @@ def Face_alignment(img,default_square = True,landmarks = []):
                                 [33.54930115, 92.3655014],
                                 [62.72990036, 92.20410156]]
 
-                pts1 = np.float64(np.matrix([[point[0], point[1]] for point in landmarks_one]))
+                pts1 = np.float64(np.matrix([[point[0], point[1]] for point in landmarks]))
                 pts2 = np.float64(np.matrix([[point[0], point[1]] for point in coord5point]))
                 M = transformation_from_points(pts1, pts2)
                 aligned_image = cv2.warpAffine(img, M[:2], (img.shape[1], img.shape[0]))

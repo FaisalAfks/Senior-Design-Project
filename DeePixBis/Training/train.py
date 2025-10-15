@@ -24,11 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-csv", required=True, help="Path to the validation CSV file.")
     parser.add_argument("--epochs", type=int, default=5, help="Number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=10, help="Mini-batch size.")
-    parser.add_argument(
-        "--weights",
-        default=None,
-        help="Optional checkpoint to resume/fine-tune from.",
-    )
+    parser.add_argument("--weights", default=None, help="Optional checkpoint to resume/fine-tune from.")
     parser.add_argument("--freeze-backbone", action="store_true", help="Freeze DenseNet encoder/decoder layers.")
     parser.add_argument("--lr", type=float, default=1e-4, help="Optimizer learning rate.")
     parser.add_argument("--threshold", type=float, default=0.5, help="Metric decision threshold.")

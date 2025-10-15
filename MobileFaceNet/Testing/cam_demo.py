@@ -8,7 +8,6 @@ Cam demo
 """
 
 import sys
-import os
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -50,9 +49,7 @@ if __name__ == '__main__':
     parser.add_argument("-tta", "--tta", help="whether test time augmentation",action="store_true", default= False)
     parser.add_argument("-c", "--score", help="whether show the confidence score",action="store_true",default= True )
     parser.add_argument("--scale", dest='scale', help="input frame scale to accurate the speed", default=0.5, type=float)
-    parser.add_argument('--mini_face', dest='mini_face', help=
-    "Minimum face to be detected. derease to increase accuracy. Increase to increase speed",
-                        default=20, type=int)
+    parser.add_argument('--mini_face', dest='mini_face', help="Minimum face to be detected. derease to increase accuracy. Increase to increase speed", default=20, type=int)
     args = parser.parse_args()
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 

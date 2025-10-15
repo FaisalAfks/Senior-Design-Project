@@ -8,7 +8,6 @@ Take cropped face from image
 """
 
 import sys
-import os
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +21,6 @@ from MTCNN import create_mtcnn_net
 from MobileFaceNet.utils.align_trans import *
 import cv2
 import argparse
-from datetime import datetime
 import torch
 
 parser = argparse.ArgumentParser(description='take ID from Picture')
@@ -45,9 +43,28 @@ bboxes, landmarks = create_mtcnn_net(
 
 warped_face = Face_alignment(image, default_square=True, landmarks=landmarks)
 
-data_path = PROJECT_ROOT / "facebank"
+data_path = PROJECT_ROOT / "Facebank"
 save_path = data_path / args.name
-if not save_path.exists():
-    save_path.mkdir()
+save_path.mkdir(parents=True, exist_ok=True)
 
-cv2.imwrite(str(save_path/'{}.jpg'.format(str(datetime.now())[:-7].replace(":","-").replace(" ","-"))), warped_face[0])
+def _next_facebank_index(directory: Path) -> int:
+    prefix = "facebank_"
+    max_index = 0
+    for file in directory.glob(f"{prefix}*"):
+        if not file.is_file():
+            continue
+        parts = file.stem.split("_")
+        if not parts:
+            continue
+        try:
+            idx = int(parts[-1])
+        except ValueError:
+            continue
+        if idx > max_index:
+            max_index = idx
+    return max_index + 1
+
+
+next_idx = _next_facebank_index(save_path)
+filename = f"facebank_{next_idx:02d}.jpg"
+cv2.imwrite(str(save_path / filename), warped_face[0])

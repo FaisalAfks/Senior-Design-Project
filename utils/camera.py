@@ -2,54 +2,88 @@
 from __future__ import annotations
 
 import platform
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple, Union
 from urllib.parse import parse_qs
 
 import cv2
 
 CSI_PREFIX = "csi://"
-DEFAULT_CAPTURE_WIDTH = 1280 # 1640
-DEFAULT_CAPTURE_HEIGHT = 720 # 1232
-DEFAULT_DISPLAY_WIDTH = DEFAULT_CAPTURE_WIDTH
-DEFAULT_DISPLAY_HEIGHT = DEFAULT_CAPTURE_HEIGHT
 DEFAULT_FPS = 30
 DEFAULT_FLIP = 0
 
 
+
+SourceType = Union[int, str, Path]
+
 def gstreamer_pipeline(
-    capture_width: int = DEFAULT_CAPTURE_WIDTH,
-    capture_height: int = DEFAULT_CAPTURE_HEIGHT,
-    display_width: int = DEFAULT_DISPLAY_WIDTH,
-    display_height: int = DEFAULT_DISPLAY_HEIGHT,
+    capture_width: int,
+    capture_height: int,
+    display_width: Optional[int] = None,
+    display_height: Optional[int] = None,
     framerate: int = DEFAULT_FPS,
     flip_method: int = DEFAULT_FLIP,
 ) -> str:
     """Compose a GStreamer pipeline string for Jetson CSI cameras."""
+    display_width = display_width or capture_width
+    display_height = display_height or capture_height
     return (
         "nvarguscamerasrc ! "
-        "video/x-raw(memory:NVMM), "
-        "width=(int)%d, height=(int)%d, framerate=(fraction)%d/1 ! "
-        "nvvidconv flip-method=%d ! "
-        "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
+        f"video/x-raw(memory:NVMM), width=(int){capture_width}, height=(int){capture_height}, "
+        f"framerate=(fraction){framerate}/1 ! "
+        f"nvvidconv flip-method={flip_method} ! "
+        f"video/x-raw, width=(int){display_width}, height=(int){display_height}, format=(string)BGRx ! "
         "videoconvert ! "
         "video/x-raw, format=(string)BGR ! appsink drop=True"
-        % (
-            capture_width,
-            capture_height,
-            framerate,
-            flip_method,
-            display_width,
-            display_height,
-        )
     )
+
+
+def open_video_source(
+    source: SourceType,
+    *,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    fps: Optional[float] = None,
+) -> cv2.VideoCapture:
+    """Open a video source using the caller-provided camera arguments."""
+    width = int(width) if width and width > 0 else None
+    height = int(height) if height and height > 0 else None
+    fps = float(fps) if fps and fps > 0 else None
+
+    if _is_linux():
+        capture = _try_open_csi_source(source, width, height, fps)
+        if capture is not None:
+            return capture
+
+    capture_source: SourceType = str(source) if isinstance(source, Path) else source
+    capture = cv2.VideoCapture(capture_source)
+    if capture.isOpened():
+        _apply_capture_properties(capture, width, height, fps)
+    return capture
 
 
 def _is_linux() -> bool:
     return platform.system().lower() == "linux"
 
 
+def _try_open_csi_source(
+    source: SourceType,
+    width: Optional[int],
+    height: Optional[int],
+    fps: Optional[float],
+) -> Optional[cv2.VideoCapture]:
+    if isinstance(source, str):
+        if source.startswith(CSI_PREFIX):
+            sensor_id, params = _parse_csi_source(source)
+            return _open_csi_capture(sensor_id=sensor_id, params=params, width=width, height=height, fps=fps)
+        if source.isdigit():
+            return _open_csi_capture(sensor_id=int(source), params={}, width=width, height=height, fps=fps)
+    if isinstance(source, int):
+        return _open_csi_capture(sensor_id=source, params={}, width=width, height=height, fps=fps)
+    return None
+
+
 def _parse_csi_source(source: str) -> Tuple[Optional[int], Dict[str, str]]:
-    """Parse a csi:// URI into optional sensor id and query parameters."""
     spec = source[len(CSI_PREFIX) :]
     if "?" in spec:
         sensor_part, query_part = spec.split("?", 1)
@@ -58,6 +92,7 @@ def _parse_csi_source(source: str) -> Tuple[Optional[int], Dict[str, str]]:
     else:
         sensor_part = spec
         params = {}
+
     sensor_id = None
     sensor_part = sensor_part.strip("/")
     if sensor_part:
@@ -100,31 +135,17 @@ def _open_csi_capture(
     *,
     sensor_id: Optional[int],
     params: Dict[str, str],
-    frame_size: Optional[Tuple[int, int]],
+    width: Optional[int],
+    height: Optional[int],
     fps: Optional[float],
-) -> cv2.VideoCapture:
-    capture_width = _int_param(
-        params,
-        "capture_width",
-        "width",
-        default=frame_size[0] if frame_size else DEFAULT_CAPTURE_WIDTH,
-    )
-    capture_height = _int_param(
-        params,
-        "capture_height",
-        "height",
-        default=frame_size[1] if frame_size else DEFAULT_CAPTURE_HEIGHT,
-    )
-    display_width = _int_param(
-        params,
-        "display_width",
-        default=frame_size[0] if frame_size else DEFAULT_DISPLAY_WIDTH,
-    )
-    display_height = _int_param(
-        params,
-        "display_height",
-        default=frame_size[1] if frame_size else DEFAULT_DISPLAY_HEIGHT,
-    )
+) -> Optional[cv2.VideoCapture]:
+    if width is None or height is None:
+        return None
+
+    capture_width = _int_param(params, "capture_width", "width", default=width)
+    capture_height = _int_param(params, "capture_height", "height", default=height)
+    display_width = _int_param(params, "display_width", default=width)
+    display_height = _int_param(params, "display_height", default=height)
     framerate = _int_param(params, "framerate", "fps", default=int(fps) if fps else DEFAULT_FPS)
     flip_method = _int_param(params, "flip_method", "flip", default=DEFAULT_FLIP)
 
@@ -144,39 +165,15 @@ def _open_csi_capture(
     return None
 
 
-def open_video_source(
-    source,
-    *,
-    frame_size: Optional[Tuple[int, int]] = None,
-    fps: Optional[float] = None,
-) -> cv2.VideoCapture:
-    """Open a video source with support for Jetson CSI cameras."""
-    if _is_linux():
-        if isinstance(source, str) and source.startswith(CSI_PREFIX):
-            sensor_id, params = _parse_csi_source(source)
-            capture = _open_csi_capture(sensor_id=sensor_id, params=params, frame_size=frame_size, fps=fps)
-            if capture is not None:
-                return capture
-        else:
-            try:
-                sensor_index = int(source) if isinstance(source, str) else int(source)
-            except (TypeError, ValueError):
-                sensor_index = None
-            if sensor_index is not None:
-                capture = _open_csi_capture(sensor_id=sensor_index, params={}, frame_size=frame_size, fps=fps)
-                if capture is not None:
-                    return capture
-
-    capture = cv2.VideoCapture(source)
-    if not capture.isOpened():
-        return capture
-
-    if frame_size is not None:
-        width, height = frame_size
-        if width:
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
-        if height:
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
-    if fps:
+def _apply_capture_properties(
+    capture: cv2.VideoCapture,
+    width: Optional[int],
+    height: Optional[int],
+    fps: Optional[float],
+) -> None:
+    if width and width > 0:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+    if height and height > 0:
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+    if fps and fps > 0:
         capture.set(cv2.CAP_PROP_FPS, float(fps))
-    return capture

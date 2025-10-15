@@ -7,7 +7,6 @@ Video Demo
 @author: AIRocker
 """
 import sys
-import os
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]

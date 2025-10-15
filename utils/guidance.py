@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from BlazeFace import BlazeFaceService, Detection
+from .orientation import compute_orientation
 
 
 @dataclass
@@ -64,19 +65,13 @@ def evaluate_alignment(
         messages.append("Move slightly back")
         sized = False
 
-    angle_deg = 0.0
+    orientation = compute_orientation(detection)
+    angle_deg = orientation.roll_deg
     leveled = True
-    if detection.keypoints.shape[0] >= 2:
-        right_eye = detection.keypoints[0]
-        left_eye = detection.keypoints[1]
-        dx = left_eye[0] - right_eye[0]
-        dy = left_eye[1] - right_eye[1]
-        if dx != 0 or dy != 0:
-            angle_deg = float(np.degrees(np.arctan2(dy, dx)))
-            if abs(angle_deg) > rotation_threshold:
-                direction = "counter-clockwise" if angle_deg < 0 else "clockwise"
-                messages.append(f"Tilt your head {direction}")
-                leveled = False
+    if abs(angle_deg) > rotation_threshold:
+        direction = "counter-clockwise" if angle_deg < 0 else "clockwise"
+        messages.append(f"Tilt your head {direction}")
+        leveled = False
 
     if not messages and not (centered and sized and leveled):
         messages.append("Adjust your position")

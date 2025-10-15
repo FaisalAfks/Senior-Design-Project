@@ -13,7 +13,7 @@ from MobileFaceNet.models.mobilefacenet import MobileFaceNet, load_facebank, pre
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rebuild or inspect the MobileFaceNet facebank.")
-    parser.add_argument("--facebank", default="facebank", help="Path to the facebank directory")
+    parser.add_argument("--facebank", default="Facebank", help="Path to the facebank directory")
     default_weights = Path(__file__).resolve().parents[1] / "Weights" / "MobileFace_Net"
     parser.add_argument("--weights", default=str(default_weights), help="MobileFaceNet weights to load")
     parser.add_argument("--tta", action="store_true", help="Enable test-time augmentation when rebuilding")

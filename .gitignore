@@ -1,3 +1,10 @@
 __pycache__/
 *.py[cod]
 attendance_results.jsonl
+DeePixBis/data
+Dataset/Known/*
+Dataset/Unknown/*
+# Facebank/**
+# !Facebank/*.pth
+# !Facebank/*.npy
+debug_snapshots
