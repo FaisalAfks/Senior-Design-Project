@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
 import cv2
 import numpy as np
 
@@ -18,6 +17,7 @@ from utils.cli import parse_main_args
 from utils.device import select_device
 from utils.logging import append_attendance_log
 from utils.power import JetsonPowerLogger, jetson_power_available
+from utils.resolution import build_resizer, parse_max_size
 from utils.services import create_services
 from utils.session import SessionRunner
 from utils.verification import aggregate_observations, compose_final_display
@@ -51,6 +51,14 @@ def main() -> None:
     requested_width = args.camera_width if args.camera_width > 0 else None
     requested_height = args.camera_height if args.camera_height > 0 else None
     frame_size = (requested_width, requested_height) if requested_width and requested_height else None
+
+    try:
+        max_frame_width, max_frame_height = parse_max_size(args.frame_max_size)
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --frame-max-size value: {exc}") from exc
+    frame_resizer = build_resizer(max_frame_width, max_frame_height)
+    if frame_resizer is not None:
+        print("Frame downsampling enabled: "f"max_width={max_frame_width or '∞'}, max_height={max_frame_height or '∞'}")
 
     device = select_device(args.device)
     detector, recogniser, spoof_service = create_services(args, device)
@@ -116,6 +124,7 @@ def main() -> None:
             window_limits=(display_width, display_height),
             guidance_min_side=GUIDANCE_MIN_SIDE,
             guidance_box_scale=GUIDANCE_BOX_SCALE,
+            frame_transform=frame_resizer,
         )
 
         require_guidance = args.mode == "guided"
@@ -177,7 +186,7 @@ def main() -> None:
                     score_fragments.append(f"spoof={summary['avg_spoof_score'] * 100.0:.1f}% ({spoof_label})")
                 if score_fragments:
                     print("Scores: " + ", ".join(score_fragments))
-                print("Press SPACE to start the next check or ESC to exit.")
+                # print("Press SPACE to start the next check or ESC to exit.")
                 power_logger.set_activity("waiting")
 
                 if not runner.wait_for_next_person():

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -148,6 +148,7 @@ def run_guidance_phase(
     min_side: int,
     box_scale: float,
     window_limits: Tuple[int, int],
+    frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> bool:
     consecutive_good = 0
     window_resized = False
@@ -157,6 +158,8 @@ def run_guidance_phase(
         ok, frame = capture.read()
         if not ok:
             return False
+        if frame_transform is not None:
+            frame = frame_transform(frame)
 
         height, width = frame.shape[:2]
         min_dim = min(height, width)

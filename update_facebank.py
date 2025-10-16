@@ -34,7 +34,10 @@ from utils.orientation import (
     orientation_distance,
 )
 
-DATASET_KNOWN = PROJECT_ROOT / "Dataset" / "Known"
+DATASET_KNOWN_ROOTS: Tuple[Path, ...] = (
+    PROJECT_ROOT / "Dataset" / "Validation" / "Known",
+    PROJECT_ROOT / "Dataset" / "Testing" / "Known",
+)
 FACEBANK_ROOT = PROJECT_ROOT / "Facebank"
 VIDEO_EXTENSIONS: Sequence[str] = (".mp4", ".mov", ".avi", ".mkv", ".webm")
 PHOTO_EXTENSIONS: Sequence[str] = (".jpg", ".jpeg", ".png")
@@ -73,6 +76,15 @@ def _iter_ext(paths: Iterable[Path], extensions: Iterable[str]) -> Iterable[Path
     for path in paths:
         if path.suffix.lower() in lowered:
             yield path
+
+
+def _iter_known_people() -> Iterable[Path]:
+    for root in DATASET_KNOWN_ROOTS:
+        if not root.exists():
+            continue
+        for person_dir in sorted(root.iterdir()):
+            if person_dir.is_dir():
+                yield person_dir
 
 
 def _has_facebank_image(person_dir: Path) -> bool:
@@ -467,7 +479,7 @@ def main() -> None:
     video_additions: List[str] = []
     augmentation_issues: List[str] = []
 
-    for person_dir in sorted(DATASET_KNOWN.iterdir()):
+    for person_dir in _iter_known_people():
         if not person_dir.is_dir():
             continue
         name = person_dir.name

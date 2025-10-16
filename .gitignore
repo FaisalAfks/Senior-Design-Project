@@ -2,7 +2,7 @@ __pycache__/
 *.py[cod]
 attendance_results.jsonl
 DeePixBis/data
-Dataset/Known/*
-Dataset/Unknown/*
+Dataset/Validation/
+Dataset/Testing/
 debug_snapshots
-Dataset.zip
+Dataset_Original

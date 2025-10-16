@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -170,6 +170,8 @@ def run_verification_phase(
     spoof_threshold: float,
     window_name: str,
     duration_limit: float,
+    *,
+    frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> Tuple[List[FaceObservation], Optional[np.ndarray], float]:
     observations: List[FaceObservation] = []
     last_frame: Optional[np.ndarray] = None
@@ -183,6 +185,8 @@ def run_verification_phase(
         ok, frame = capture.read()
         if not ok:
             break
+        if frame_transform is not None:
+            frame = frame_transform(frame)
         last_frame = frame.copy()
 
         observation = evaluate_frame(frame, detector, recogniser, spoof_service, spoof_threshold)

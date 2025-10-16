@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -62,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         help="If provided, save the figure to this file instead of displaying it.",
     )
     parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory to save figures when rendering multiple plots from a combined metrics file.",
+    )
+    parser.add_argument(
         "--dpi",
         type=int,
         default=200,
@@ -71,6 +75,17 @@ def parse_args() -> argparse.Namespace:
         "--show",
         action="store_true",
         help="Display the plot window (requires GUI backend).",
+    )
+    parser.add_argument(
+        "--plot",
+        dest="plot_names",
+        action="append",
+        help="Name of a plot defined in a combined experiment metrics file (repeatable). Use 'all' to render every plot.",
+    )
+    parser.add_argument(
+        "--list-plots",
+        action="store_true",
+        help="List available plots defined in the metrics file and exit.",
     )
     return parser.parse_args()
 
@@ -112,6 +127,7 @@ def render_confusion_matrix(
     class_labels: tuple[str, str],
 ) -> plt.Figure:
     counts = entry["counts"]
+    total_samples = sum(counts.values())
     matrix = np.array(
         [
             [counts["tp"], counts["fn"]],
@@ -129,8 +145,13 @@ def render_confusion_matrix(
     ax.set_yticks([0, 1], labels=[pos_label, neg_label])
     ax.set_xlabel("Predicted label")
     ax.set_ylabel("True label")
-    default_title = f"Threshold = {display_threshold}"
-    ax.set_title(title or default_title)
+    metrics = entry.get("metrics", {})
+    detail = f"thr {display_threshold} | samples {total_samples}"
+    if title:
+        title_text = title if "samples" in title.lower() else f"{title} | {detail}"
+    else:
+        title_text = detail
+    fig.suptitle(title_text)
 
     for (row, col), value in np.ndenumerate(matrix):
         ax.text(col, row, f"{int(value)}", ha="center", va="center", color="black", fontsize=10)
@@ -154,6 +175,113 @@ def render_confusion_matrix(
 
     fig.tight_layout()
     return fig
+
+
+def render_accuracy_plot(
+    series: Sequence[Tuple[str, Sequence[Dict[str, Any]]]],
+    *,
+    title: str,
+    xlabel: str,
+) -> Optional[plt.Figure]:
+    filtered_series = [(label, entries) for label, entries in series if entries]
+    if not filtered_series:
+        return None
+
+    threshold_values = sorted(
+        {
+            float(entry["threshold"])
+            for _, entries in filtered_series
+            for entry in entries
+        }
+    )
+    if not threshold_values:
+        return None
+
+    sample_size: Optional[int] = None
+    for _, entries in filtered_series:
+        if entries:
+            counts = entries[0].get("counts")
+            if counts:
+                sample_size = sum(counts.values())
+            break
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    color_cycle = plt.rcParams.get("axes.prop_cycle", None)
+    colors = color_cycle.by_key().get("color", []) if color_cycle is not None else []
+    if not colors:
+        colors = ["C0", "C1", "C2", "C3", "C4", "C5"]
+    # Provide contrasting dash colors so FPR/FNR stand out
+    fpr_colors = ["#d62728", "#e377c2", "#bcbd22", "#17becf", "#ff9896", "#c5b0d5"]
+    fnr_colors = ["#9467bd", "#8c564b", "#aec7e8", "#98df8a", "#ffbb78", "#c49c94"]
+
+    for index, (label, entries) in enumerate(filtered_series):
+        lookup = {float(entry["threshold"]): entry for entry in entries}
+        accuracy_vals: List[float] = []
+        fpr_vals: List[float] = []
+        fnr_vals: List[float] = []
+        for threshold in threshold_values:
+            metrics = lookup.get(threshold, {}).get("metrics", {})
+            accuracy = metrics.get("accuracy")
+            fpr = metrics.get("fpr")
+            fnr = metrics.get("fnr")
+            accuracy_vals.append(float("nan") if accuracy is None else float(accuracy))
+            fpr_vals.append(float("nan") if fpr is None else float(fpr))
+            fnr_vals.append(float("nan") if fnr is None else float(fnr))
+
+        color = colors[index % len(colors)]
+        fpr_color = fpr_colors[index % len(fpr_colors)]
+        fnr_color = fnr_colors[index % len(fnr_colors)]
+        ax.plot(
+            threshold_values,
+            accuracy_vals,
+            color=color,
+            linestyle="-",
+            marker="o",
+            label=f"{label} accuracy",
+        )
+        ax.plot(
+            threshold_values,
+            fpr_vals,
+            color=fpr_color,
+            linestyle="--",
+            marker="x",
+            label=f"{label} FPR",
+        )
+        ax.plot(
+            threshold_values,
+            fnr_vals,
+            color=fnr_color,
+            linestyle="--",
+            marker="^",
+            label=f"{label} FNR",
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Accuracy")
+    title_text = title or ""
+    if sample_size is not None and "samples" not in title_text.lower():
+        title_text = f"{title_text} | samples {sample_size}" if title_text else f"samples {sample_size}"
+    fig.suptitle(title_text)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, linestyle=":", linewidth=0.5)
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
+def save_accuracy_plot(
+    series: Sequence[Tuple[str, Sequence[Dict[str, Any]]]],
+    output_path: Path,
+    *,
+    title: str,
+    xlabel: str,
+) -> None:
+    fig = render_accuracy_plot(series, title=title, xlabel=xlabel)
+    if fig is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 
 def is_power_log(payload: Any) -> bool:
@@ -392,6 +520,176 @@ def main() -> None:
     args = parse_args()
     payload = load_metrics(args.metrics)
 
+    plots_section = payload.get("plots") if isinstance(payload, dict) else None
+    if isinstance(plots_section, dict) and plots_section:
+        available_names = list(plots_section.keys())
+        if args.list_plots or not args.plot_names:
+            print("Available plots:")
+            for name in available_names:
+                title = plots_section.get(name, {}).get("title", name)
+                print(f" - {name}: {title}")
+            if not args.plot_names:
+                print("Re-run with --plot <name> (or --plot all) to render a plot.")
+            return
+
+        if args.output and args.output_dir:
+            raise SystemExit("Use either --output or --output-dir, not both.")
+
+        selected_names: List[str] = []
+        for raw_name in args.plot_names or []:
+            if raw_name.lower() == "all":
+                for candidate in available_names:
+                    if candidate not in selected_names:
+                        selected_names.append(candidate)
+                continue
+            if raw_name not in plots_section:
+                available_display = ", ".join(available_names)
+                raise SystemExit(f"Unknown plot '{raw_name}'. Available plots: {available_display}")
+            if raw_name not in selected_names:
+                selected_names.append(raw_name)
+
+        if not selected_names:
+            raise SystemExit("No plots selected.")
+        if args.output and len(selected_names) > 1:
+            raise SystemExit("Cannot use --output when rendering multiple plots; use --output-dir instead.")
+
+        figures: List[plt.Figure] = []
+        if args.output_dir:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+
+        for name in selected_names:
+            config = plots_section.get(name, {})
+            plot_type = config.get("type")
+            if plot_type is None:
+                plot_type = "accuracy" if "series" in config else "confusion"
+
+            if args.title and len(selected_names) == 1:
+                plot_title = args.title
+            else:
+                plot_title = config.get("title", name)
+
+            plot_subtitle = config.get("subtitle")
+            plot_figures: List[plt.Figure] = []
+            if isinstance(plot_subtitle, str) and plot_subtitle:
+                plot_title = f"{plot_title} | {plot_subtitle}" if plot_title else plot_subtitle
+
+            if plot_type == "accuracy":
+                series_specs = config.get("series", [])
+                if name.startswith("spoof_") and len(series_specs) > 1:
+                    for spec in series_specs:
+                        label = spec.get("label", "Series")
+                        entries = spec.get("entries")
+                        if not entries:
+                            continue
+                        subplot_title = f"{plot_title} ({label})"
+                        fig = render_accuracy_plot(
+                            [(label, entries)],
+                            title=subplot_title,
+                            xlabel=config.get("xlabel", "Threshold"),
+                        )
+                        if fig is not None:
+                            plot_figures.append(fig)
+                else:
+                    series_data: List[Tuple[str, Sequence[Dict[str, Any]]]] = []
+                    for spec in series_specs:
+                        label = spec.get("label", "Series")
+                        entries = spec.get("entries")
+                        if not entries:
+                            continue
+                        series_data.append((label, entries))
+                    if not series_data:
+                        print(f"Skipping plot '{name}' (no data).")
+                        continue
+                    fig = render_accuracy_plot(
+                        series_data,
+                        title=plot_title,
+                        xlabel=config.get("xlabel", "Threshold"),
+                    )
+                    if fig is not None:
+                        plot_figures.append(fig)
+            elif plot_type == "confusion":
+                confusion_matrices = config.get("confusion_matrices")
+                if not confusion_matrices:
+                    print(f"Skipping plot '{name}' (no confusion matrices).")
+                    continue
+                default_threshold = config.get("default_threshold")
+                threshold_override = args.threshold if args.threshold is not None else default_threshold
+                entry = pick_entry(confusion_matrices, threshold=threshold_override, strategy=args.strategy)
+                threshold_value = entry.get("threshold")
+                scale = 100.0 if threshold_value and threshold_value > 1.0 else 1.0
+                display_value = threshold_value / scale if scale else threshold_value
+                display_threshold = (
+                    f"{display_value:.4f}".rstrip("0").rstrip(".")
+                    if isinstance(display_value, (int, float))
+                    else str(display_value)
+                )
+                labels_override = config.get("labels")
+                if isinstance(labels_override, list) and len(labels_override) == 2:
+                    class_labels = (labels_override[0], labels_override[1])
+                else:
+                    lower_name = name.lower()
+                    if "spoof" in lower_name:
+                        class_labels = ("Real", "Spoof")
+                    elif "detector" in lower_name:
+                        class_labels = ("Face", "No Face")
+                    elif "pipeline" in lower_name:
+                        class_labels = ("Accept", "Reject")
+                    else:
+                        class_labels = ("Known", "Unknown")
+                fig = render_confusion_matrix(
+                    entry,
+                    title=plot_title,
+                    display_threshold=display_threshold,
+                    class_labels=class_labels,
+                )
+                if fig is not None:
+                    plot_figures.append(fig)
+            else:
+                print(f"Skipping plot '{name}' (unsupported type: {plot_type}).")
+                continue
+
+            if not plot_figures:
+                print(f"Skipping plot '{name}' (insufficient data).")
+                continue
+
+            if args.output and len(plot_figures) > 1:
+                raise SystemExit("Cannot save multiple figures to a single --output file; use --output-dir instead.")
+
+            for idx_fig, fig in enumerate(plot_figures):
+                target_path: Optional[Path] = None
+                if args.output_dir:
+                    filename = f"{name}.png" if len(plot_figures) == 1 else f"{name}_{idx_fig + 1}.png"
+                    target_path = args.output_dir / filename
+                elif args.output:
+                    target_path = args.output
+
+                if target_path is not None:
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    fig.savefig(target_path, dpi=args.dpi)
+                    print(f"Saved figure to {target_path}")
+                    if args.show or (not args.output and not args.output_dir):
+                        figures.append(fig)
+                    else:
+                        plt.close(fig)
+                else:
+                    figures.append(fig)
+
+        if not figures and not (args.output_dir and not args.show):
+            print("No plots were generated.")
+
+        if figures:
+            if args.show or (not args.output and not args.output_dir):
+                plt.show()
+            else:
+                for fig in figures:
+                    plt.close(fig)
+        return
+    elif args.plot_names or args.list_plots:
+        raise SystemExit("This metrics file does not define composite plots.")
+
+    if args.output_dir:
+        raise SystemExit("--output-dir is only supported when rendering plots from a combined metrics file.")
+
     if is_power_log(payload):
         fig = render_power_plot(payload, title=args.title)
     else:
@@ -425,7 +723,12 @@ def main() -> None:
                 title_parts.append(Path(dataset).name)
             title = " | ".join(title_parts)
 
-        fig = render_confusion_matrix(entry, title=title, display_threshold=display_threshold, class_labels=class_labels)
+        fig = render_confusion_matrix(
+            entry,
+            title=title,
+            display_threshold=display_threshold,
+            class_labels=class_labels,
+        )
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

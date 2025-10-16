@@ -37,6 +37,7 @@ class SessionRunner:
         window_limits: Tuple[int, int],
         guidance_min_side: int,
         guidance_box_scale: float,
+        frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     ) -> None:
         self.capture = capture
         self.detector = detector
@@ -48,6 +49,7 @@ class SessionRunner:
         self.guidance_min_side = guidance_min_side
         self.guidance_box_scale = guidance_box_scale
         self.window_adjusted = False
+        self.frame_transform = frame_transform
 
     def run_cycle(
         self,
@@ -67,6 +69,7 @@ class SessionRunner:
                 min_side=self.guidance_min_side,
                 box_scale=self.guidance_box_scale,
                 window_limits=self.window_limits,
+                frame_transform=self.frame_transform,
             )
             if not proceed:
                 return None
@@ -86,6 +89,7 @@ class SessionRunner:
             self.args.spoof_thr,
             self.window_name,
             self.args.evaluation_duration,
+            frame_transform=self.frame_transform,
         )
         return SessionCycle(observations=observations, last_frame=last_frame, duration=duration)
 

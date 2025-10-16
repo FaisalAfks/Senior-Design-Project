@@ -22,7 +22,7 @@ def parse_main_args(
     )
     parser.add_argument(
         "--source",
-        default="csi://0",
+        default="0",
         help="Camera index (e.g. 0) or path to a video file (csi://0) for jetson.",
     )
     parser.add_argument(
@@ -130,6 +130,12 @@ def parse_main_args(
         type=int,
         default=10,
         help="Number of consecutive aligned frames before verification begins.",
+    )
+    parser.add_argument(
+        "--frame-max-size",
+        type=str,
+        default="1280x720",
+        help="Optional maximum resolution for captured frames as WIDTHxHEIGHT (e.g. 1280x720).",
     )
     parser.add_argument(
         "--power-log",
