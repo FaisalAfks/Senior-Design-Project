@@ -120,19 +120,20 @@ def draw_guidance_overlay(
         2,
     )
 
-    messages = assessment.messages or ["Hold steady..."]
-    y_offset = 70
-    for message in messages:
-        cv2.putText(
-            display,
-            message,
-            (20, y_offset),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            status_color,
-            2,
-        )
-        y_offset += 28
+    messages = assessment.messages if not assessment.is_aligned else []
+    if messages:
+        y_offset = 70
+        for message in messages:
+            cv2.putText(
+                display,
+                message,
+                (20, y_offset),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                status_color,
+                2,
+            )
+            y_offset += 28
 
     return display
 
@@ -232,4 +233,3 @@ def run_guidance_phase(
 
         if consecutive_good >= args.guidance_hold_frames:
             return True
-

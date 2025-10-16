@@ -11,6 +11,7 @@ def parse_main_args(
     default_facebank: Path,
     default_spoof_weights: Path,
     default_attendance_log: Path,
+    default_power_log: Path,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Face verification with optional alignment guidance.")
     parser.add_argument(
@@ -21,8 +22,8 @@ def parse_main_args(
     )
     parser.add_argument(
         "--source",
-        default="0",
-        help="Camera index (e.g. 0) or path to a video file.",
+        default="csi://0",
+        help="Camera index (e.g. 0) or path to a video file (csi://0) for jetson.",
     )
     parser.add_argument(
         "--camera-width",
@@ -64,7 +65,7 @@ def parse_main_args(
     parser.add_argument(
         "--identity-thr",
         type=float,
-        default=0.7,
+        default=0.85,
         help="Identity acceptance threshold on the 0-1 score scale.",
     )
     parser.add_argument(
@@ -86,7 +87,7 @@ def parse_main_args(
     parser.add_argument(
         "--spoof-thr",
         type=float,
-        default=0.9,
+        default=0.85,
         help="Minimum DeePixBiS score to label a face as real.",
     )
     parser.add_argument(
@@ -103,19 +104,19 @@ def parse_main_args(
     parser.add_argument(
         "--guidance-box-size",
         type=int,
-        default=0,
+        default=224,
         help="Edge length in pixels for the guidance square (0 = auto).",
     )
     parser.add_argument(
         "--guidance-center-tolerance",
         type=float,
-        default=0.2,
+        default=0.3,
         help="Fraction of the square half-side tolerated for centering during guidance.",
     )
     parser.add_argument(
         "--guidance-size-tolerance",
         type=float,
-        default=0.2,
+        default=0.3,
         help="Fractional tolerance for face size vs square during guidance.",
     )
     parser.add_argument(
@@ -129,5 +130,31 @@ def parse_main_args(
         type=int,
         default=10,
         help="Number of consecutive aligned frames before verification begins.",
+    )
+    parser.add_argument(
+        "--power-log",
+        default=str(default_power_log),
+        help="Path to store Jetson power telemetry as JSON (ignored when power logging is disabled).",
+    )
+    parser.add_argument(
+        "--power-interval",
+        type=float,
+        default=1.0,
+        help="Sampling interval in seconds for Jetson power logging.",
+    )
+    parser.add_argument(
+        "--enable-power-log",
+        action="store_true",
+        help="Force-enable Jetson power logging regardless of auto-detection.",
+    )
+    parser.add_argument(
+        "--disable-power-log",
+        action="store_true",
+        help="Disable Jetson power logging even if auto-detected.",
+    )
+    parser.add_argument(
+        "--quiet-power-log",
+        action="store_true",
+        help="Suppress per-sample power output while logging.",
     )
     return parser.parse_args()

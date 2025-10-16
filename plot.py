@@ -1,19 +1,45 @@
 #!/usr/bin/env python3
-"""Plot confusion matrices stored in recognizer/spoof metrics JSON files."""
+"""Plot metrics or Jetson power telemetry stored in JSON files."""
 from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+ACTIVITY_CANONICAL = {
+    "initializing": "setup",
+    "camera-initialization": "setup",
+    "ready": "idle",
+    "waiting": "idle",
+    "guidance": "guidance",
+    "verification": "verification",
+    "processing": "processing",
+    "terminating": "shutdown",
+    "cleanup": "shutdown",
+    "shutdown": "shutdown",
+}
+
+PHASE_COLORS = {
+    "setup": "#1f77b4",  # blue
+    "idle": "#2ca02c",  # green
+    "guidance": "#ff7f0e",  # orange
+    "verification": "#d62728",  # red
+    "processing": "#9467bd",  # purple
+    "shutdown": "#7f7f7f",  # gray
+    "other": "#bcbd22",  # olive
+}
+
+MIN_SEGMENT_DURATION = 1.0  # seconds
+
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render a 2x2 confusion matrix from metrics JSON output.")
-    parser.add_argument("metrics", type=Path, help="Path to recognizer_metrics.json or spoof_metrics.json.")
+    parser = argparse.ArgumentParser(description="Render a confusion matrix or Jetson power log from a JSON file.")
+    parser.add_argument("metrics", type=Path, help="Path to metrics JSON or Jetson power log JSON.")
     parser.add_argument(
         "--threshold",
         type=float,
@@ -130,40 +156,276 @@ def render_confusion_matrix(
     return fig
 
 
+def is_power_log(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    samples = payload.get("samples")
+    if not isinstance(samples, list) or not samples:
+        return False
+    first = samples[0]
+    if not isinstance(first, dict):
+        return False
+    return "total_power_w" in first
+
+
+def render_power_plot(
+    log_payload: Dict[str, Any],
+    *,
+    title: Optional[str],
+) -> plt.Figure:
+    samples: List[Dict[str, Any]] = [sample for sample in log_payload.get("samples", []) if isinstance(sample, dict)]
+    if not samples:
+        raise RuntimeError("No samples found in power log.")
+
+    metadata = log_payload.get("metadata") if isinstance(log_payload.get("metadata"), dict) else {}
+    start_timestamp = metadata.get("start_timestamp")
+
+    times: List[float] = []
+    power_values: List[float] = []
+    for sample in samples:
+        total_power = sample.get("total_power_w")
+        if total_power is None:
+            continue
+        elapsed = sample.get("elapsed_s")
+        if elapsed is None and start_timestamp is not None:
+            timestamp = sample.get("timestamp")
+            if timestamp is not None:
+                elapsed = float(timestamp) - float(start_timestamp)
+        elapsed = float(elapsed) if elapsed is not None else float(sample.get("timestamp", 0.0))
+        times.append(max(0.0, elapsed))
+        power_values.append(float(total_power))
+
+    if not power_values:
+        raise RuntimeError("Power log does not contain usable samples.")
+
+    fig, ax = plt.subplots()
+    ax.plot(times, power_values, marker="o", linewidth=1.5, color="tab:blue")
+    ax.set_xlabel("Elapsed time (s)")
+    ax.set_ylabel("Total power (W)")
+
+    if title is None:
+        avg_power = sum(power_values) / len(power_values)
+        min_power = min(power_values)
+        max_power = max(power_values)
+        default_title = "Jetson Power Log"
+        default_title += f" · avg={avg_power:.2f}W"
+        default_title += f" · min={min_power:.2f}W"
+        default_title += f" · max={max_power:.2f}W"
+        default_title += f" · points={len(power_values)}"
+        ax.set_title(default_title)
+    else:
+        ax.set_title(title)
+
+    segments = _build_activity_segments(metadata, samples, times)
+    if segments:
+        _shade_activity_regions(ax, segments)
+
+    fig.tight_layout()
+    return fig
+
+
+def _build_activity_segments(
+    metadata: Dict[str, Any],
+    samples: List[Dict[str, Any]],
+    sampled_times: List[float],
+) -> List[Tuple[float, float, str]]:
+    events_raw = metadata.get("activity_events")
+    if not isinstance(events_raw, list):
+        return []
+
+    events: List[Tuple[float, str]] = []
+    for item in events_raw:
+        if not isinstance(item, dict):
+            continue
+        timestamp = item.get("timestamp")
+        activity = item.get("activity")
+        try:
+            ts = float(timestamp)
+        except (TypeError, ValueError):
+            continue
+        activity_str = str(activity or "unknown")
+        events.append((ts, activity_str))
+
+    if not events:
+        return []
+
+    events.sort(key=lambda pair: pair[0])
+
+    start_ts_raw = metadata.get("start_timestamp")
+    try:
+        start_ts = float(start_ts_raw) if start_ts_raw is not None else events[0][0]
+    except (TypeError, ValueError):
+        start_ts = events[0][0]
+
+    end_ts_raw = metadata.get("end_timestamp")
+    end_ts: Optional[float]
+    if end_ts_raw is not None:
+        try:
+            end_ts = float(end_ts_raw)
+        except (TypeError, ValueError):
+            end_ts = None
+    else:
+        end_ts = None
+    if end_ts is None:
+        sample_ts_values = []
+        for sample in samples:
+            try:
+                sample_ts_values.append(float(sample.get("timestamp")))
+            except (TypeError, ValueError):
+                continue
+        if sample_ts_values:
+            end_ts = max(sample_ts_values)
+    if end_ts is None:
+        end_ts = events[-1][0]
+
+    max_elapsed = None
+    if sampled_times:
+        max_elapsed = max(sampled_times)
+
+    segments: List[Tuple[float, float, str]] = []
+    for idx, (event_ts, activity) in enumerate(events):
+        next_ts = events[idx + 1][0] if idx + 1 < len(events) else end_ts
+        try:
+            raw_end_ts = float(next_ts)
+        except (TypeError, ValueError):
+            raw_end_ts = event_ts
+        start_elapsed = max(0.0, event_ts - start_ts)
+        end_elapsed = max(start_elapsed, raw_end_ts - start_ts)
+        if max_elapsed is not None:
+            end_elapsed = min(end_elapsed, max_elapsed)
+        if end_elapsed <= start_elapsed:
+            if max_elapsed is not None and max_elapsed > start_elapsed:
+                end_elapsed = max_elapsed
+            else:
+                end_elapsed = start_elapsed + 1e-6
+        segments.append((start_elapsed, end_elapsed, activity))
+
+    if not segments and sampled_times:
+        # Fallback: treat entire run as a single segment with the most recent activity.
+        segments.append((0.0, sampled_times[-1], events[-1][1]))
+
+    segments = _canonicalise_segments(segments)
+    segments = _collapse_short_segments(segments)
+    return segments
+
+
+def _shade_activity_regions(ax: plt.Axes, segments: List[Tuple[float, float, str]]) -> None:
+    if not segments:
+        return
+
+    labels_used: Set[str] = set()
+    displayed_labels: Set[str] = set()
+
+    for start, end, phase in segments:
+        if end <= start:
+            continue
+        color = PHASE_COLORS.get(phase, PHASE_COLORS["other"])
+        label = _format_activity_label(phase, labels_used)
+        span_kwargs = {"alpha": 0.25, "color": color, "lw": 0}
+        if label is not None:
+            span_kwargs["label"] = label
+            displayed_labels.add(label)
+        ax.axvspan(start, end, **span_kwargs)
+        labels_used.add(phase)
+
+    if displayed_labels:
+        ax.legend(loc="upper right", title="Activity")
+
+
+def _format_activity_label(activity_key: str, labels_used: Set[str]) -> Optional[str]:
+    if activity_key in labels_used:
+        return None
+    pretty = activity_key.replace("-", " ").strip().title() or "Unknown"
+    return pretty
+
+
+def _canonicalise_segments(segments: List[Tuple[float, float, str]]) -> List[Tuple[float, float, str]]:
+    canonicalised: List[Tuple[float, float, str]] = []
+    for start, end, activity in segments:
+        phase = ACTIVITY_CANONICAL.get(activity.lower().strip(), activity.lower().strip())
+        if canonicalised and canonicalised[-1][2] == phase:
+            prev_start, prev_end, _ = canonicalised[-1]
+            canonicalised[-1] = (prev_start, max(prev_end, end), phase)
+        else:
+            canonicalised.append((start, end, phase))
+    return canonicalised
+
+
+def _collapse_short_segments(segments: List[Tuple[float, float, str]]) -> List[Tuple[float, float, str]]:
+    if not segments:
+        return []
+
+    collapsed: List[Tuple[float, float, str]] = []
+    carry_start: Optional[float] = None
+
+    for start, end, phase in segments:
+        if carry_start is not None:
+            start = min(start, carry_start)
+            carry_start = None
+
+        duration = end - start
+        if duration < MIN_SEGMENT_DURATION:
+            if collapsed:
+                prev_start, prev_end, prev_phase = collapsed[-1]
+                collapsed[-1] = (prev_start, max(prev_end, end), prev_phase)
+            else:
+                carry_start = start
+            continue
+
+        if collapsed and collapsed[-1][2] == phase:
+            prev_start, prev_end, _ = collapsed[-1]
+            collapsed[-1] = (prev_start, max(prev_end, end), phase)
+        else:
+            collapsed.append((start, end, phase))
+
+    if carry_start is not None and collapsed:
+        prev_start, prev_end, prev_phase = collapsed[-1]
+        collapsed[-1] = (min(prev_start, carry_start), prev_end, prev_phase)
+
+    if not collapsed and segments:
+        collapsed.append(segments[-1])
+
+    return collapsed
+
+
 def main() -> None:
     args = parse_args()
     payload = load_metrics(args.metrics)
-    matrices = payload.get("confusion_matrices")
-    if not matrices:
-        raise RuntimeError(f"No confusion matrices found in {args.metrics}")
 
-    entry = pick_entry(matrices, threshold=args.threshold, strategy=args.strategy)
-
-    scale = 100.0 if entry["threshold"] > 1.0 else 1.0
-    display_threshold_val = entry["threshold"] / scale if scale else entry["threshold"]
-    display_threshold = (
-        f"{display_threshold_val:.4f}".rstrip("0").rstrip(".") if isinstance(display_threshold_val, (int, float)) else str(display_threshold_val)
-    )
-
-    metrics_name = payload.get("name") or Path(args.metrics).stem
-    name_lower = metrics_name.lower()
-    metrics_path_lower = str(args.metrics).lower()
-    if "spoof" in name_lower or "spoof" in metrics_path_lower:
-        class_labels = ("Real", "Spoof")
+    if is_power_log(payload):
+        fig = render_power_plot(payload, title=args.title)
     else:
-        class_labels = ("Known", "Unknown")
+        matrices = payload.get("confusion_matrices")
+        if not matrices:
+            raise RuntimeError(f"No confusion matrices found in {args.metrics}")
 
-    if args.title:
-        title = args.title
-    else:
-        dataset = payload.get("dataset_root", "")
-        prefix = metrics_name
-        title_parts = [prefix, f"thr={display_threshold}"]
-        if dataset:
-            title_parts.append(Path(dataset).name)
-        title = " | ".join(title_parts)
+        entry = pick_entry(matrices, threshold=args.threshold, strategy=args.strategy)
 
-    fig = render_confusion_matrix(entry, title=title, display_threshold=display_threshold, class_labels=class_labels)
+        scale = 100.0 if entry["threshold"] > 1.0 else 1.0
+        display_threshold_val = entry["threshold"] / scale if scale else entry["threshold"]
+        display_threshold = (
+            f"{display_threshold_val:.4f}".rstrip("0").rstrip(".") if isinstance(display_threshold_val, (int, float)) else str(display_threshold_val)
+        )
+
+        metrics_name = payload.get("name") or Path(args.metrics).stem
+        name_lower = metrics_name.lower()
+        metrics_path_lower = str(args.metrics).lower()
+        if "spoof" in name_lower or "spoof" in metrics_path_lower:
+            class_labels = ("Real", "Spoof")
+        else:
+            class_labels = ("Known", "Unknown")
+
+        if args.title:
+            title = args.title
+        else:
+            dataset = payload.get("dataset_root", "")
+            prefix = metrics_name
+            title_parts = [prefix, f"thr={display_threshold}"]
+            if dataset:
+                title_parts.append(Path(dataset).name)
+            title = " | ".join(title_parts)
+
+        fig = render_confusion_matrix(entry, title=title, display_threshold=display_threshold, class_labels=class_labels)
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

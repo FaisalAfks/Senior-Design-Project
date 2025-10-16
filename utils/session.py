@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -49,8 +49,15 @@ class SessionRunner:
         self.guidance_box_scale = guidance_box_scale
         self.window_adjusted = False
 
-    def run_cycle(self, *, require_guidance: bool) -> Optional[SessionCycle]:
+    def run_cycle(
+        self,
+        *,
+        require_guidance: bool,
+        on_activity_change: Optional[Callable[[str], None]] = None,
+    ) -> Optional[SessionCycle]:
         if require_guidance:
+            if on_activity_change is not None:
+                on_activity_change("guidance")
             proceed = run_guidance_phase(
                 self.capture,
                 self.detector,
@@ -68,6 +75,8 @@ class SessionRunner:
             if not self.window_adjusted:
                 adjust_window_to_capture(self.capture, self.window_name, self.window_limits)
                 self.window_adjusted = True
+        if on_activity_change is not None:
+            on_activity_change("verification")
 
         observations, last_frame, duration = run_verification_phase(
             self.capture,
@@ -101,4 +110,3 @@ def adjust_window_to_capture(
     target_w = min(frame_width, width_limit)
     target_h = min(frame_height, height_limit)
     cv2.resizeWindow(window_name, target_w, target_h)
-
