@@ -206,7 +206,10 @@ def run_guidance_phase(
             assessment=assessment,
         )
         instruction_lines: List[Tuple[str, Tuple[int, int, int], float]] = []
-        instruction_lines.append(("Align your face within the square", (255, 255, 255), 0.8))
+        # Only show the alignment prompt when a face is detected to avoid
+        # overlapping with the built-in "No face detected" banner.
+        if detection is not None:
+            instruction_lines.append(("Align your face within the square", (255, 255, 255), 0.8))
 
         if detection is None:
             instruction_lines.append(("Face not detected, center yourself", (0, 0, 255), 0.7))
@@ -223,10 +226,18 @@ def run_guidance_phase(
         else:
             instruction_lines.append(("Detecting face...", (0, 165, 255), 0.7))
 
-        base_y = 40
+        # If no face was detected, `draw_guidance_overlay` already printed
+        # "No face detected" at y=40; offset subsequent instructions.
+        base_y = 80 if detection is None else 40
         line_spacing = 28
         for text, color, scale in instruction_lines:
-            cv2.putText(display, text, (20, base_y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
+            # Center the primary alignment prompt at the top of the window.
+            if text == "Align your face within the square":
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+                text_x = max(20, (display.shape[1] - tw) // 2)
+            else:
+                text_x = 20
+            cv2.putText(display, text, (text_x, base_y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
             base_y += int(line_spacing * scale / 0.7)
 
         cv2.imshow(window_name, display)

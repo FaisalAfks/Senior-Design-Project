@@ -16,17 +16,22 @@ from utils.camera import open_video_source
 from utils.cli import parse_main_args
 from utils.device import select_device
 from utils.logging import append_attendance_log
+from utils.paths import logs_path
 from utils.power import JetsonPowerLogger, jetson_power_available
 from utils.resolution import build_resizer, parse_max_size
-from utils.services import create_services
+from utils.services import create_services, warmup_services
 from utils.session import SessionRunner
-from utils.verification import aggregate_observations, compose_final_display
+from utils.verification import (
+    aggregate_observations,
+    compose_final_display,
+    compose_direct_display,
+)
 
 DEFAULT_WEIGHTS = ROOT / "MobileFaceNet" / "Weights" / "MobileFace_Net"
 DEFAULT_FACEBANK = ROOT / "Facebank"
 DEFAULT_SPOOF_WEIGHTS = ROOT / "DeePixBis" / "Weights" / "DeePixBiS.pth"
-DEFAULT_ATTENDANCE_LOG = ROOT / "attendance_results.jsonl"
-DEFAULT_POWER_LOG = ROOT / "jetson_power_log.json"
+DEFAULT_ATTENDANCE_LOG = logs_path("attendance_results.jsonl")
+DEFAULT_POWER_LOG = logs_path("jetson_power_log.json")
 
 WINDOW_WIDTH_LIMIT = 1280
 WINDOW_HEIGHT_LIMIT = 720
@@ -114,6 +119,21 @@ def main() -> None:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, display_width, display_height)
 
+        # Proactively warm up CUDA/cuDNN by running a few dry forwards
+        # so the first verification doesn't stall. This uses constant
+        # dummy inputs matching the expected model input sizes.
+        try:
+            power_logger.set_activity("warmup")
+            warmup_services(
+                detector,
+                recogniser,
+                spoof_service,
+                frame_size=(resolved_width, resolved_height),
+                iters=2,
+            )
+        finally:
+            power_logger.set_activity("ready")
+
         runner = SessionRunner(
             capture,
             detector,
@@ -131,69 +151,123 @@ def main() -> None:
         power_logger.set_activity("ready")
 
         try:
-            while True:
-                cycle = runner.run_cycle(
-                    require_guidance=require_guidance,
-                    on_activity_change=power_logger.set_activity,
-                )
-                if cycle is None:
-                    power_logger.set_activity("terminating")
-                    break
+            if args.mode == "direct":
+                power_logger.set_activity("direct")
+                import time
+                prev_t = time.perf_counter()
+                smoothed_fps = None
+                while True:
+                    ok, frame = capture.read()
+                    if not ok:
+                        power_logger.set_activity("terminating")
+                        break
+                    if frame_resizer is not None:
+                        frame = frame_resizer(frame)
 
-                power_logger.set_activity("processing")
-                summary = aggregate_observations(cycle.observations, spoof_threshold=args.spoof_thr)
-                summary["capture_duration"] = cycle.duration
-                timestamp = datetime.now(timezone.utc).isoformat()
+                    from utils.verification import evaluate_frame_with_timing
+                    observation, timings = evaluate_frame_with_timing(frame, detector, recogniser, spoof_service, args.spoof_thr)
+                    annotated = compose_direct_display(
+                        frame,
+                        observation,
+                        spoof_threshold=args.spoof_thr,
+                    )
 
-                log_entry = {
-                    "timestamp": timestamp,
-                    "source": raw_source,
-                    "recognized": summary["recognized"],
-                    "identity": summary["identity"],
-                    "avg_identity_score": summary["avg_identity_score"],
-                    "avg_spoof_score": summary["avg_spoof_score"],
-                    "is_real": summary["is_real"],
-                    "accepted": summary["accepted"],
-                    "frames_with_detections": summary["frames_with_detections"],
-                    "capture_duration": summary.get("capture_duration"),
-                }
-                append_attendance_log(Path(args.attendance_log), log_entry)
+                    # Always show FPS (smoothed) and per-system timings at top-left
+                    now_t = time.perf_counter()
+                    dt = max(1e-6, now_t - prev_t)
+                    inst_fps = 1.0 / dt
+                    smoothed_fps = inst_fps if smoothed_fps is None else (0.85 * smoothed_fps + 0.15 * inst_fps)
+                    prev_t = now_t
+                    # FPS in cyan-like color (BGR: 255,255,0)
+                    fps_text = f"FPS: {smoothed_fps:5.1f}"
+                    x = 20
+                    y = 30
+                    cv2.putText(annotated, fps_text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-                display_frame = cycle.last_frame
-                if display_frame is None:
-                    frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or resolved_height
-                    frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or resolved_width
-                    display_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+                    # Timings in ms for detector / recogniser / spoof (yellow)
+                    y += 28
+                    cv2.putText(annotated, f"Detector: {timings.get('detector_ms', 0.0):.1f} ms", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    y += 28
+                    cv2.putText(annotated, f"Recogniser: {timings.get('recognition_ms', 0.0):.1f} ms", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    if spoof_service is not None:
+                        y += 28
+                        cv2.putText(annotated, f"Spoof: {timings.get('spoof_ms', 0.0):.1f} ms", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-                final_display = compose_final_display(
-                    display_frame,
-                    summary,
-                    show_spoof_score=spoof_service is not None,
-                )
-                cv2.imshow(window_name, final_display)
+                    # Hint text
+                    instruction = "Press ESC or q to quit"
+                    (itw, ith), _ = cv2.getTextSize(instruction, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                    ix = max(20, (annotated.shape[1] - itw) // 2)
+                    iy = annotated.shape[0] - 20
+                    cv2.putText(annotated, instruction, (ix, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+                    cv2.imshow(window_name, annotated)
 
-                status_text = "ACCESS GRANTED" if summary["accepted"] else "ACCESS DENIED"
-                print(f"[{timestamp}] {status_text}: {summary['identity']}")
-                score_fragments = []
-                if summary.get("avg_identity_score") is not None:
-                    score_fragments.append(f"identity={summary['avg_identity_score'] * 100.0:.1f}%")
-                if spoof_service is not None and summary.get("avg_spoof_score") is not None:
-                    spoof_label = "real"
-                    if summary.get("is_real") is False:
-                        spoof_label = "spoof"
-                    elif summary.get("is_real") is None:
-                        spoof_label = "unknown"
-                    score_fragments.append(f"spoof={summary['avg_spoof_score'] * 100.0:.1f}% ({spoof_label})")
-                if score_fragments:
-                    print("Scores: " + ", ".join(score_fragments))
-                # print("Press SPACE to start the next check or ESC to exit.")
-                power_logger.set_activity("waiting")
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (27, ord("q")):
+                        power_logger.set_activity("terminating")
+                        break
+            else:
+                while True:
+                    cycle = runner.run_cycle(
+                        require_guidance=require_guidance,
+                        on_activity_change=power_logger.set_activity,
+                    )
+                    if cycle is None:
+                        power_logger.set_activity("terminating")
+                        break
 
-                if not runner.wait_for_next_person():
-                    power_logger.set_activity("terminating")
-                    break
+                    power_logger.set_activity("processing")
+                    summary = aggregate_observations(cycle.observations, spoof_threshold=args.spoof_thr)
+                    summary["capture_duration"] = cycle.duration
+                    timestamp = datetime.now(timezone.utc).isoformat()
 
-                power_logger.set_activity("ready")
+                    log_entry = {
+                        "timestamp": timestamp,
+                        "source": raw_source,
+                        "recognized": summary["recognized"],
+                        "identity": summary["identity"],
+                        "avg_identity_score": summary["avg_identity_score"],
+                        "avg_spoof_score": summary["avg_spoof_score"],
+                        "is_real": summary["is_real"],
+                        "accepted": summary["accepted"],
+                        "frames_with_detections": summary["frames_with_detections"],
+                        "capture_duration": summary.get("capture_duration"),
+                    }
+                    append_attendance_log(Path(args.attendance_log), log_entry)
+
+                    display_frame = cycle.last_frame
+                    if display_frame is None:
+                        frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or resolved_height
+                        frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or resolved_width
+                        display_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+
+                    final_display = compose_final_display(
+                        display_frame,
+                        summary,
+                        show_spoof_score=spoof_service is not None,
+                    )
+                    cv2.imshow(window_name, final_display)
+
+                    status_text = "ACCESS GRANTED" if summary["accepted"] else "ACCESS DENIED"
+                    print(f"[{timestamp}] {status_text}: {summary['identity']}")
+                    score_fragments = []
+                    if summary.get("avg_identity_score") is not None:
+                        score_fragments.append(f"identity={summary['avg_identity_score'] * 100.0:.1f}%")
+                    if spoof_service is not None and summary.get("avg_spoof_score") is not None:
+                        spoof_label = "real"
+                        if summary.get("is_real") is False:
+                            spoof_label = "spoof"
+                        elif summary.get("is_real") is None:
+                            spoof_label = "unknown"
+                        score_fragments.append(f"spoof={summary['avg_spoof_score'] * 100.0:.1f}% ({spoof_label})")
+                    if score_fragments:
+                        print("Scores: " + ", ".join(score_fragments))
+                    power_logger.set_activity("waiting")
+
+                    if not runner.wait_for_next_person():
+                        power_logger.set_activity("terminating")
+                        break
+
+                    power_logger.set_activity("ready")
         finally:
             capture.release()
             cv2.destroyAllWindows()

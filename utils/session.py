@@ -89,6 +89,8 @@ class SessionRunner:
             self.args.spoof_thr,
             self.window_name,
             self.args.evaluation_duration,
+            mode=self.args.evaluation_mode,
+            frame_limit=self.args.evaluation_frames,
             frame_transform=self.frame_transform,
         )
         return SessionCycle(observations=observations, last_frame=last_frame, duration=duration)

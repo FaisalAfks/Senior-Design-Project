@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+ROOT = Path(__file__).resolve().parent
+LOGS_DIR = ROOT / "logs"
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 ACTIVITY_CANONICAL = {
     "initializing": "setup",
@@ -46,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--strategy",
-        choices=["max-accuracy", "max-f1"],
+        choices=["max-accuracy", "max-f1", "min-eer"],
         default="max-accuracy",
         help="Heuristic used to pick a threshold when --threshold is not supplied.",
     )
@@ -90,9 +95,29 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_metrics_path(path: Path) -> Path:
+    """Return the actual metrics file path, falling back to logs/ if needed."""
+    if path.exists():
+        return path
+    if not path.is_absolute():
+        candidate = LOGS_DIR.joinpath(*path.parts)
+        if candidate.exists():
+            return candidate
+    return path
+
+
 def load_metrics(path: Path) -> Dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    resolved = resolve_metrics_path(path)
+    try:
+        with resolved.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError as exc:
+        search_paths = [str(path)]
+        if resolved != path:
+            search_paths.append(str(resolved))
+        raise FileNotFoundError(
+            "Metrics file not found; checked: " + ", ".join(search_paths)
+        ) from exc
 
 
 def pick_entry(
@@ -114,8 +139,32 @@ def pick_entry(
 
     if strategy == "max-f1":
         key = "f1"
-    else:
-        key = "accuracy"
+        return max(matrices, key=lambda entry: metric_value(entry, key))
+    if strategy == "min-eer":
+        def eer_key(entry: Dict[str, Any]) -> Tuple[float, float]:
+            metrics = entry.get("metrics", {})
+            gap = metrics.get("eer_gap")
+            eer = metrics.get("eer")
+            fpr = metrics.get("fpr")
+            fnr = metrics.get("fnr")
+            if gap is None and fpr is not None and fnr is not None:
+                try:
+                    gap = abs(float(fpr) - float(fnr))
+                except (TypeError, ValueError):
+                    gap = None
+            if gap is None:
+                gap = float("inf")
+            if eer is None and fpr is not None and fnr is not None:
+                try:
+                    eer = (float(fpr) + float(fnr)) / 2.0
+                except (TypeError, ValueError):
+                    eer = None
+            if eer is None:
+                eer = float("inf")
+            return float(gap), float(eer)
+
+        return min(matrices, key=eer_key)
+    key = "accuracy"
     return max(matrices, key=lambda entry: metric_value(entry, key))
 
 
@@ -136,44 +185,136 @@ def render_confusion_matrix(
         dtype=float,
     )
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(matrix, cmap="Blues")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
     pos_label, neg_label = class_labels
     ax.set_xticks([0, 1], labels=[pos_label, neg_label])
     ax.set_yticks([0, 1], labels=[pos_label, neg_label])
     ax.set_xlabel("Predicted label")
     ax.set_ylabel("True label")
-    metrics = entry.get("metrics", {})
-    detail = f"thr {display_threshold} | samples {total_samples}"
+
+    extra_info_parts: List[str] = []
     if title:
-        title_text = title if "samples" in title.lower() else f"{title} | {detail}"
+        raw_parts = [part.strip() for part in title.split("|")]
+        main_title = raw_parts[0] if raw_parts and raw_parts[0] else title.strip()
+        skip_prefixes = ("thr", "threshold", "det", "rec", "spoof", "samples")
+        for fragment in raw_parts[1:]:
+            cleaned = fragment.strip()
+            if not cleaned:
+                continue
+            lower = cleaned.lower()
+            if lower.startswith(skip_prefixes):
+                continue
+            extra_info_parts.append(cleaned)
     else:
-        title_text = detail
-    fig.suptitle(title_text)
+        main_title = "Confusion Matrix"
+    fig.suptitle(main_title or "Confusion Matrix")
 
     for (row, col), value in np.ndenumerate(matrix):
         ax.text(col, row, f"{int(value)}", ha="center", va="center", color="black", fontsize=10)
 
-    metrics = entry.get("metrics", {})
-    subtitle = ", ".join(
-        f"{name.upper()}={metrics[name]:.3f}"
-        for name in ("accuracy", "precision", "tpr", "fpr")
-        if metrics.get(name) is not None
-    )
-    if subtitle:
+    raw_metrics = entry.get("metrics")
+    metrics: Dict[str, Any] = {}
+    if isinstance(raw_metrics, dict):
+        metrics = dict(raw_metrics)
+
+    if metrics.get("eer") is None:
+        fpr = metrics.get("fpr")
+        fnr = metrics.get("fnr")
+        if fpr is not None and fnr is not None:
+            try:
+                metrics["eer"] = (float(fpr) + float(fnr)) / 2.0
+            except (TypeError, ValueError):
+                pass
+
+    info_lines: List[str] = []
+    if extra_info_parts:
+        info_lines.append(" | ".join(extra_info_parts))
+
+    details = entry.get("details")
+    thresholds_line: Optional[str] = None
+    if isinstance(details, dict):
+        thresholds = details.get("thresholds")
+        if isinstance(thresholds, dict) and thresholds:
+            label_map = {
+                "detection": "Detection",
+                "recognition": "Recognition",
+                "spoof": "Spoof",
+            }
+            formatted = []
+            for key in sorted(thresholds):
+                label = label_map.get(key, key.replace("_", " ").title())
+                try:
+                    value = float(thresholds[key])
+                    formatted.append(f"{label}: {value:.2f}")
+                except (TypeError, ValueError):
+                    formatted.append(f"{label}: {thresholds[key]}")
+            if formatted:
+                thresholds_line = "Thresholds - " + " | ".join(formatted)
+    if thresholds_line:
+        info_lines.append(thresholds_line)
+    else:
+        info_lines.append(f"Threshold: {display_threshold}")
+
+    if not any("sample" in line.lower() for line in info_lines):
+        info_lines.append(f"Samples: {total_samples}")
+
+    metric_order = [
+        ("accuracy", "ACC"),
+        ("precision", "PREC"),
+        ("tpr", "TPR"),
+        ("tnr", "TNR"),
+        ("fpr", "FPR"),
+        ("fnr", "FNR"),
+        ("f1", "F1"),
+        ("eer", "EER"),
+    ]
+    metric_items = [
+        f"{label}={metrics[key]:.3f}"
+        for key, label in metric_order
+        if metrics.get(key) is not None
+    ]
+    if metric_items:
+        items_per_line = 4
+        for index in range(0, len(metric_items), items_per_line):
+            info_lines.append(" | ".join(metric_items[index : index + items_per_line]))
+
+    if info_lines:
         ax.text(
             0.5,
-            -0.15,
-            subtitle,
+            -0.28,
+            "\n".join(info_lines),
             transform=ax.transAxes,
             ha="center",
-            va="center",
+            va="top",
             fontsize=9,
+            linespacing=1.4,
         )
 
     fig.tight_layout()
+    fig.subplots_adjust(top=0.88, bottom=0.3)
+
+    axes_group = [ax]
+    if cbar is not None:
+        axes_group.append(cbar.ax)
+
+    try:
+        fig.canvas.draw()
+    except Exception:
+        pass
+    left = min(axis.get_position().x0 for axis in axes_group)
+    right = max(axis.get_position().x1 for axis in axes_group)
+    width = right - left
+    if width > 0 and width < 1:
+        desired_left = (1.0 - width) / 2.0
+        shift = desired_left - left
+        if abs(shift) > 1e-3:
+            for axis in axes_group:
+                pos = axis.get_position()
+                axis.set_position([pos.x0 + shift, pos.y0, pos.width, pos.height])
+
     return fig
 
 
@@ -205,7 +346,7 @@ def render_accuracy_plot(
                 sample_size = sum(counts.values())
             break
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(9.5, 6.0))
     color_cycle = plt.rcParams.get("axes.prop_cycle", None)
     colors = color_cycle.by_key().get("color", []) if color_cycle is not None else []
     if not colors:
@@ -258,14 +399,106 @@ def render_accuracy_plot(
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Accuracy")
-    title_text = title or ""
-    if sample_size is not None and "samples" not in title_text.lower():
-        title_text = f"{title_text} | samples {sample_size}" if title_text else f"samples {sample_size}"
-    fig.suptitle(title_text)
+    extra_info_parts: List[str] = []
+    if title:
+        raw_parts = [part.strip() for part in title.split("|")]
+        main_title = raw_parts[0] if raw_parts and raw_parts[0] else title.strip()
+        seen_extra: Set[str] = set()
+        for part in raw_parts[1:]:
+            cleaned = part.strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen_extra:
+                continue
+            seen_extra.add(key)
+            extra_info_parts.append(cleaned)
+    else:
+        main_title = title
+    sample_override: Optional[str] = None
+    normalised_info: List[str] = []
+    for part in extra_info_parts:
+        lower = part.lower()
+        if "sample" in lower:
+            match = _NUMBER_RE.search(part)
+            if match:
+                sample_override = f"Samples: {match.group(0)}"
+            else:
+                sample_override = part.capitalize()
+            continue
+        if lower.startswith("best") and "thr" in lower:
+            match = _NUMBER_RE.search(part)
+            if match:
+                normalised_info.append(f"Best threshold: {match.group(0)}")
+            else:
+                normalised_info.append(part.replace("thr", "threshold").capitalize())
+            continue
+        normalised_info.append(part)
+    extra_info_parts = normalised_info
+    fig.suptitle(main_title or "")
+
+    fpr_values: List[float] = []
+    fnr_values: List[float] = []
+    for _, entries in filtered_series:
+        for entry in entries:
+            metrics = entry.get("metrics", {})
+            fpr = metrics.get("fpr")
+            fnr = metrics.get("fnr")
+            if isinstance(fpr, (int, float)):
+                fpr_values.append(float(fpr))
+            if isinstance(fnr, (int, float)):
+                fnr_values.append(float(fnr))
+
+    footer_lines: List[str] = []
+    if extra_info_parts:
+        footer_lines.append(" | ".join(extra_info_parts))
+
+    threshold_min = threshold_values[0]
+    threshold_max = threshold_values[-1]
+    if len(threshold_values) == 1:
+        threshold_label = f"Threshold: {threshold_min:.4g}"
+    else:
+        threshold_label = f"Threshold range: {threshold_min:.4g} – {threshold_max:.4g}"
+    footer_lines.append(threshold_label)
+
+    supplements: List[str] = []
+    if sample_override:
+        supplements.append(sample_override)
+    elif sample_size is not None:
+        supplements.append(f"Samples: {sample_size}")
+
+    step_value: Optional[float] = None
+    if len(threshold_values) > 1:
+        delta_set = {
+            round(threshold_values[idx + 1] - threshold_values[idx], 10)
+            for idx in range(len(threshold_values) - 1)
+            if abs(threshold_values[idx + 1] - threshold_values[idx]) > 1e-9
+        }
+        deltas = sorted(delta_set)
+        if deltas:
+            step_value = deltas[0]
+    if step_value is not None:
+        supplements.append(f"Step: {step_value:.4g}")
+
+    if supplements:
+        footer_lines.append(" | ".join(supplements))
+
+    if footer_lines:
+        fig.text(
+            0.5,
+            0.02,
+            "\n".join(footer_lines),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            linespacing=1.3,
+        )
+
     ax.set_ylim(0.0, 1.0)
     ax.grid(True, linestyle=":", linewidth=0.5)
     ax.legend()
     fig.tight_layout()
+    fig.subplots_adjust(top=0.9, bottom=0.2)
     return fig
 
 

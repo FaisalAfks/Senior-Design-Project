@@ -65,13 +65,13 @@ def parse_main_args(
     parser.add_argument(
         "--identity-thr",
         type=float,
-        default=0.85,
+        default=0.88,
         help="Identity acceptance threshold on the 0-1 score scale.",
     )
     parser.add_argument(
         "--detector-thr",
         type=float,
-        default=0.7,
+        default=0.8,
         help="Minimum BlazeFace confidence required to keep detections.",
     )
     parser.add_argument(
@@ -87,7 +87,7 @@ def parse_main_args(
     parser.add_argument(
         "--spoof-thr",
         type=float,
-        default=0.85,
+        default=0.90,
         help="Minimum DeePixBiS score to label a face as real.",
     )
     parser.add_argument(
@@ -95,6 +95,18 @@ def parse_main_args(
         type=float,
         default=1.0,
         help="Duration (seconds) to capture frames for verification.",
+    )
+    parser.add_argument(
+        "--evaluation-mode",
+        choices=["time", "frames"],
+        default="time",
+        help="Capture by wall-time budget ('time') or fixed frame count ('frames').",
+    )
+    parser.add_argument(
+        "--evaluation-frames",
+        type=int,
+        default=30,
+        help="Number of frames to capture when --evaluation-mode=frames.",
     )
     parser.add_argument(
         "--attendance-log",

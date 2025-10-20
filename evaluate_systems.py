@@ -17,6 +17,7 @@ from DeePixBis import DeePixBiSService
 from MobileFaceNet import MobileFaceNetService
 from main import DEFAULT_FACEBANK, DEFAULT_SPOOF_WEIGHTS, DEFAULT_WEIGHTS
 from utils.device import select_device
+from utils.paths import dataset_path, logs_path
 from utils.verification import evaluate_frame
 
 
@@ -49,8 +50,20 @@ class SampleResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate detector, recogniser, and anti-spoof models.")
-    parser.add_argument("--dataset-root", type=Path, default=Path("Dataset") / "Validation", help="Validation dataset root (default: Dataset/Validation).")
-    parser.add_argument("--testing-root", type=Path, default=Path("Dataset") / "Testing", help="Testing dataset root for final evaluation (default: Dataset/Testing).")
+    default_validation_root = dataset_path("Validation")
+    default_testing_root = dataset_path("Testing")
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=default_validation_root,
+        help=f"Validation dataset root (default: {default_validation_root}).",
+    )
+    parser.add_argument(
+        "--testing-root",
+        type=Path,
+        default=default_testing_root,
+        help=f"Testing dataset root for final evaluation (default: {default_testing_root}).",
+    )
     parser.add_argument("--device", default="cpu", help="Torch device string (cpu, cuda, cuda:0, ...).")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="Path to MobileFaceNet weights.")
     parser.add_argument("--facebank", type=Path, default=DEFAULT_FACEBANK, help="Path to facebank directory.")
@@ -60,7 +73,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--detector-thresholds", default="0.5:0.9:0.05", help="Detection thresholds as comma list or range start:end:step (default 0.4:0.9:0.05).")
     parser.add_argument("--recognition-thresholds", default="0.5:0.9:0.02", help="Recognition thresholds as comma list or range start:end:step (default 0.5:0.9:0.05).")
     parser.add_argument("--spoof-thresholds", default="0.5:0.9:0.02", help="Spoof thresholds as comma list or range start:end:step (default 0.5:0.9:0.05).")
-    parser.add_argument("--summary-output", type=Path, default=Path("evaluation_summary.json"), help="Output path for combined evaluation summary.")
+    default_summary_output = logs_path("evaluation_summary.json")
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        default=default_summary_output,
+        help=f"Output path for combined evaluation summary (default: {default_summary_output}).",
+    )
     return parser.parse_args()
 
 
@@ -293,6 +312,14 @@ def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> Dict[str, Optional[fl
         metrics["f1"] = 2 * precision * recall / (precision + recall)
     else:
         metrics["f1"] = None
+    fnr = metrics.get("fnr")
+    fpr = metrics.get("fpr")
+    if fnr is not None and fpr is not None:
+        metrics["eer"] = (fnr + fpr) / 2.0
+        metrics["eer_gap"] = abs(fnr - fpr)
+    else:
+        metrics["eer"] = None
+        metrics["eer_gap"] = None
     return metrics
 
 

@@ -1,5 +1,7 @@
 __pycache__/
 *.py[cod]
+.venv/
+debug_snapshots
 Facebank/*
 !Facebank/
 !Facebank/facebank.pth
