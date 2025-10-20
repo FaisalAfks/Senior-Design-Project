@@ -1,11 +1,5 @@
 __pycache__/
 *.py[cod]
-logs/
-DeePixBis/data
-Dataset/Validation/
-Dataset/Testing/
-debug_snapshots
-Dataset_Original
 Facebank/*
 !Facebank/
 !Facebank/facebank.pth
