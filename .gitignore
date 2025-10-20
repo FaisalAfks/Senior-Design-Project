@@ -1,8 +1,13 @@
 __pycache__/
 *.py[cod]
-attendance_results.jsonl
+logs/
 DeePixBis/data
 Dataset/Validation/
 Dataset/Testing/
 debug_snapshots
 Dataset_Original
+Facebank/*
+!Facebank/
+!Facebank/facebank.pth
+!Facebank/names.npy
+SDP.code-workspace
