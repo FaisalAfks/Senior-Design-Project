@@ -6,7 +6,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 try:  # pragma: no cover - optional dependency
     from jtop import jtop as _jtop_context  # type: ignore
@@ -80,6 +80,7 @@ class JetsonPowerLogger:
         self._thread: Optional[threading.Thread] = None
         self._start_timestamp: Optional[float] = None
         self._end_timestamp: Optional[float] = None
+        self._metadata_context: Dict[str, Any] = {}
 
     def __enter__(self) -> "JetsonPowerLogger":
         self.start()
@@ -125,6 +126,52 @@ class JetsonPowerLogger:
         self._record_activity_event(activity, timestamp)
         if self.verbose:
             print(f"[Power] Activity -> {activity}")
+
+    def update_metadata(self, **fields: Any) -> None:
+        """Merge custom fields into the metadata block for the final log."""
+        if not fields:
+            return
+        sanitized: Dict[str, Any] = {}
+        for key, value in fields.items():
+            if value is None:
+                continue
+            sanitized[key] = value
+        if not sanitized:
+            return
+        with self._lock:
+            self._metadata_context.update(sanitized)
+
+    def set_resolution(
+        self,
+        width: int,
+        height: int,
+        *,
+        fps: Optional[float] = None,
+        source: Optional[str] = None,
+    ) -> None:
+        """Record the resolved capture resolution (and optional FPS) in metadata."""
+        try:
+            width_int = int(width)
+            height_int = int(height)
+        except (TypeError, ValueError):
+            return
+        if width_int <= 0 or height_int <= 0:
+            return
+        resolution: Dict[str, Any] = {
+            "width": width_int,
+            "height": height_int,
+            "label": f"{width_int}x{height_int}",
+        }
+        if fps is not None:
+            try:
+                fps_val = float(fps)
+            except (TypeError, ValueError):
+                fps_val = None
+            if fps_val is not None and fps_val > 0:
+                resolution["fps"] = fps_val
+        if source is not None:
+            resolution["source"] = str(source)
+        self.update_metadata(resolution=resolution)
 
     # Internal helpers -----------------------------------------------------------------
 
@@ -207,17 +254,22 @@ class JetsonPowerLogger:
     def _write_log(self) -> None:
         if not self.enabled or not self.log_path:
             return
+        with self._lock:
+            activity_events = list(self._activity_events)
+            metadata_context = dict(self._metadata_context)
         payload = {
             "metadata": {
                 "backend": "jtop",
                 "start_timestamp": self._start_timestamp,
                 "end_timestamp": self._end_timestamp,
                 "sample_interval_s": self.sample_interval,
-                "activity_events": list(self._activity_events),
+                "activity_events": activity_events,
                 "error": self._last_error,
             },
             "samples": [asdict(sample) for sample in self._samples],
         }
+        if metadata_context:
+            payload["metadata"].update(metadata_context)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

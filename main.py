@@ -104,6 +104,26 @@ def main() -> None:
         else:
             print(f"Camera opened at {resolved_width}x{resolved_height}")
 
+        if power_logger.enabled:
+            fps_for_log = actual_fps if actual_fps > 0 else None
+            power_logger.set_resolution(
+                resolved_width,
+                resolved_height,
+                fps=fps_for_log,
+                source=str(raw_source),
+            )
+            requested_meta: dict[str, int] = {}
+            if requested_width:
+                requested_meta["width"] = int(requested_width)
+            if requested_height:
+                requested_meta["height"] = int(requested_height)
+            if requested_meta:
+                power_logger.update_metadata(requested_resolution=requested_meta)
+            if frame_size:
+                power_logger.update_metadata(target_resolution={"width": frame_size[0], "height": frame_size[1]})
+            if args.frame_max_size:
+                power_logger.update_metadata(frame_max_size=args.frame_max_size)
+
         if frame_size and (abs(resolved_width - frame_size[0]) > 1 or abs(resolved_height - frame_size[1]) > 1):
             print(f"Requested {frame_size[0]}x{frame_size[1]} but camera delivered {resolved_width}x{resolved_height}")
 

@@ -538,7 +538,8 @@ def render_power_plot(
     if not samples:
         raise RuntimeError("No samples found in power log.")
 
-    metadata = log_payload.get("metadata") if isinstance(log_payload.get("metadata"), dict) else {}
+    metadata_raw = log_payload.get("metadata")
+    metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
     start_timestamp = metadata.get("start_timestamp")
 
     times: List[float] = []
@@ -564,11 +565,45 @@ def render_power_plot(
     ax.set_xlabel("Elapsed time (s)")
     ax.set_ylabel("Total power (W)")
 
+    descriptor = None
+    resolution_info = metadata.get("resolution")
+    if isinstance(resolution_info, dict):
+        label = resolution_info.get("label")
+        resolution_label: Optional[str]
+        if isinstance(label, str) and label.strip():
+            resolution_label = label.strip()
+        else:
+            width_val = resolution_info.get("width")
+            height_val = resolution_info.get("height")
+            try:
+                width_int = int(width_val)
+                height_int = int(height_val)
+            except (TypeError, ValueError):
+                resolution_label = None
+            else:
+                if width_int > 0 and height_int > 0:
+                    resolution_label = f"{width_int}x{height_int}"
+                else:
+                    resolution_label = None
+        fps_val = resolution_info.get("fps")
+        try:
+            fps_float = float(fps_val)
+        except (TypeError, ValueError):
+            fps_float = None
+        if resolution_label and fps_float and fps_float > 0:
+            descriptor = f"{resolution_label} @ {fps_float:.2f} FPS"
+        elif resolution_label:
+            descriptor = resolution_label
+        elif fps_float and fps_float > 0:
+            descriptor = f"{fps_float:.2f} FPS"
+
     if title is None:
         avg_power = sum(power_values) / len(power_values)
         min_power = min(power_values)
         max_power = max(power_values)
         default_title = "Jetson Power Log"
+        if descriptor:
+            default_title += f" · {descriptor}"
         default_title += f" · avg={avg_power:.2f}W"
         default_title += f" · min={min_power:.2f}W"
         default_title += f" · max={max_power:.2f}W"
@@ -875,6 +910,37 @@ def main() -> None:
                     display_threshold=display_threshold,
                     class_labels=class_labels,
                 )
+                if fig is not None:
+                    plot_figures.append(fig)
+            elif plot_type == "power":
+                payload_value = config.get("payload")
+                if isinstance(payload_value, dict):
+                    log_payload = payload_value
+                else:
+                    log_payload = None
+                    log_spec = None
+                    for key in ("log", "log_path", "path", "file", "metrics"):
+                        spec_candidate = config.get(key)
+                        if spec_candidate is not None:
+                            log_spec = spec_candidate
+                            break
+                    if log_spec is None:
+                        print(f"Skipping plot '{name}' (no power log specified).")
+                        continue
+                    if isinstance(log_spec, (list, tuple)):
+                        print(f"Skipping plot '{name}' (list of power logs not supported).")
+                        continue
+                    candidate_path = resolve_metrics_path(Path(log_spec))
+                    try:
+                        with candidate_path.open("r", encoding="utf-8") as handle:
+                            log_payload = json.load(handle)
+                    except FileNotFoundError:
+                        print(f"Skipping plot '{name}' (power log not found: {candidate_path})")
+                        continue
+                if not isinstance(log_payload, dict):
+                    print(f"Skipping plot '{name}' (invalid power log payload).")
+                    continue
+                fig = render_power_plot(log_payload, title=plot_title)
                 if fig is not None:
                     plot_figures.append(fig)
             else:
