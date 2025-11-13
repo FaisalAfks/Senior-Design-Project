@@ -111,8 +111,6 @@ class SessionRunner:
         if self._wait_for_next_callback is not None:
             return bool(self._wait_for_next_callback())
         while True:
-            if self._window_closed():
-                return False
             key = cv2.waitKey(0) & 0xFF
             if key == ord(" "):
                 return True
@@ -148,17 +146,8 @@ class SessionRunner:
         """Return True when the operator cancels guidance from the OpenCV window."""
         if self._poll_cancel_callback is not None:
             return bool(self._poll_cancel_callback())
-        if self._window_closed():
-            return True
         key = cv2.waitKey(1) & 0xFF
         return key in (27, ord("q"))
-
-    def _window_closed(self) -> bool:
-        try:
-            prop = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
-        except cv2.error:
-            return True
-        return prop < 1
 
 
 def adjust_window_to_capture(

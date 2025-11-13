@@ -82,6 +82,11 @@ def parse_args() -> argparse.Namespace:
         help="Display the plot window (requires GUI backend).",
     )
     parser.add_argument(
+        "--process-power",
+        action="store_true",
+        help="When plotting Jetson power logs, chart the estimated power attributed to the tracked process instead of total board power.",
+    )
+    parser.add_argument(
         "--plot",
         dest="plot_names",
         action="append",
@@ -564,6 +569,7 @@ def render_power_plot(
     log_payload: Dict[str, Any],
     *,
     title: Optional[str],
+    use_process_power: bool = False,
 ) -> plt.Figure:
     samples: List[Dict[str, Any]] = [sample for sample in log_payload.get("samples", []) if isinstance(sample, dict)]
     if not samples:
@@ -575,10 +581,28 @@ def render_power_plot(
 
     times: List[float] = []
     power_values: List[float] = []
+    process_descriptor: Optional[str] = None
     for sample in samples:
-        total_power = sample.get("total_power_w")
-        if total_power is None:
-            continue
+        if use_process_power:
+            process_info = sample.get("process")
+            if not isinstance(process_info, dict):
+                continue
+            total_power = process_info.get("estimated_power_w")
+            if total_power is None:
+                continue
+            if process_descriptor is None:
+                pid = process_info.get("pid")
+                name = process_info.get("name")
+                if pid is not None and name:
+                    process_descriptor = f"PID {pid} ({name})"
+                elif pid is not None:
+                    process_descriptor = f"PID {pid}"
+                elif name:
+                    process_descriptor = str(name)
+        else:
+            total_power = sample.get("total_power_w")
+            if total_power is None:
+                continue
         elapsed = sample.get("elapsed_s")
         if elapsed is None and start_timestamp is not None:
             timestamp = sample.get("timestamp")
@@ -589,12 +613,14 @@ def render_power_plot(
         power_values.append(float(total_power))
 
     if not power_values:
+        if use_process_power:
+            raise RuntimeError("Power log does not contain per-process samples. Did you enable power logging with process tracking?")
         raise RuntimeError("Power log does not contain usable samples.")
 
     fig, ax = plt.subplots()
     ax.plot(times, power_values, marker="o", linewidth=1.5, color="tab:blue")
     ax.set_xlabel("Elapsed time (s)")
-    ax.set_ylabel("Total power (W)")
+    ax.set_ylabel("Process power (W)" if use_process_power else "Total power (W)")
 
     descriptor = None
     resolution_info = metadata.get("resolution")
@@ -627,18 +653,26 @@ def render_power_plot(
             descriptor = resolution_label
         elif fps_float and fps_float > 0:
             descriptor = f"{fps_float:.2f} FPS"
+    descriptor_parts: List[str] = []
+    if use_process_power:
+        descriptor_parts.append("process power")
+        if process_descriptor:
+            descriptor_parts.append(process_descriptor)
+    if descriptor:
+        descriptor_parts.append(descriptor)
+    descriptor_text = " · ".join(descriptor_parts) if descriptor_parts else None
 
     if title is None:
         avg_power = sum(power_values) / len(power_values)
         min_power = min(power_values)
         max_power = max(power_values)
         default_title = "Jetson Power Log"
-        if descriptor:
-            default_title += f" Â· {descriptor}"
-        default_title += f" Â· avg={avg_power:.2f}W"
-        default_title += f" Â· min={min_power:.2f}W"
-        default_title += f" Â· max={max_power:.2f}W"
-        default_title += f" Â· points={len(power_values)}"
+        if descriptor_text:
+            default_title += f" · {descriptor_text}"
+        default_title += f" · avg={avg_power:.2f}W"
+        default_title += f" · min={min_power:.2f}W"
+        default_title += f" · max={max_power:.2f}W"
+        default_title += f" · points={len(power_values)}"
         ax.set_title(default_title)
     else:
         ax.set_title(title)
@@ -971,7 +1005,7 @@ def main() -> None:
                 if not isinstance(log_payload, dict):
                     print(f"Skipping plot '{name}' (invalid power log payload).")
                     continue
-                fig = render_power_plot(log_payload, title=plot_title)
+                fig = render_power_plot(log_payload, title=plot_title, use_process_power=args.process_power)
                 if fig is not None:
                     plot_figures.append(fig)
             else:
@@ -1029,7 +1063,7 @@ def main() -> None:
         raise SystemExit("--output-dir is only supported when rendering plots from a combined metrics file.")
 
     if is_power_log(payload):
-        fig = render_power_plot(payload, title=args.title)
+        fig = render_power_plot(payload, title=args.title, use_process_power=args.process_power)
     else:
         matrices = payload.get("confusion_matrices")
         if not matrices:

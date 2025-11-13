@@ -26,7 +26,7 @@ def parse_main_args(
     )
     capture_group.add_argument(
         "--source",
-        default="0",
+        default="csi://0",
         help="Camera index (e.g. 0) or path to a video file (csi://0) for jetson.",
     )
     capture_group.add_argument(
@@ -112,7 +112,7 @@ def parse_main_args(
     verification_group.add_argument(
         "--evaluation-duration",
         type=float,
-        default=1.0,
+        default=0.9,
         help="Duration (seconds) to capture frames for verification.",
     )
     verification_group.add_argument(
