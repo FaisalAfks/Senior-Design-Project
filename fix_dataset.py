@@ -7,7 +7,7 @@ import math
 import sys
 import uuid
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 try:
     from PIL import Image, ImageOps
@@ -28,6 +28,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     cv2 = None
 
+from utils.paths import dataset_path
 from utils.resolution import parse_max_size, scaled_dimensions
 
 MEDIA_DIR_NAMES = {"Photos", "Videos"}
@@ -38,18 +39,26 @@ PREFIX_MAP: Dict[Tuple[str, str], str] = {
     ("Spoof", "Photos"): "spoof_photo",
     ("Spoof", "Videos"): "spoof_video",
 }
-IGNORED_FILENAMES = {"thumbs.db"}
+IGNORED_FILENAMES = {"thumbs.db", "desktop.ini"}
 PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".mpg", ".mpeg", ".wmv", ".webm"}
+DEFAULT_DATASET_ROOTS: Tuple[Path, Path] = (
+    dataset_path("Validation"),
+    dataset_path("Testing"),
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fix Dataset filenames to follow the real/spoof naming scheme.")
     parser.add_argument(
         "--dataset-root",
+        dest="dataset_roots",
+        action="append",
         type=Path,
-        default=Path("Dataset") / "Validation",
-        help="Root directory containing Known/Unknown data (default: Dataset/Validation).",
+        help=(
+            "Root directory containing Known/Unknown data. Provide multiple times to process several roots. "
+            f"Defaults to {DEFAULT_DATASET_ROOTS[0]} and {DEFAULT_DATASET_ROOTS[1]} when omitted."
+        ),
     )
     parser.add_argument(
         "--apply",
@@ -101,25 +110,66 @@ def compute_operations(media_dir: Path) -> List[Tuple[Path, Path]]:
     if not prefix:
         return []
 
-    files = sorted(path for path in media_dir.iterdir() if path.is_file())
-    if not files:
+    candidate_files = [
+        path
+        for path in sorted(media_dir.iterdir())
+        if path.is_file() and path.name.lower() not in IGNORED_FILENAMES
+    ]
+    if not candidate_files:
         return []
 
-    digits = max(2, len(str(len(files))))
+    digits = max(2, len(str(len(candidate_files))))
     operations: List[Tuple[Path, Path]] = []
-    index = 1
-    for file_path in files:
-        if file_path.name.lower() in IGNORED_FILENAMES:
-            continue
+    used_indices: Set[int] = set()
+    to_rename: List[Tuple[Path, str, Optional[int]]] = []
+    prefix_lower = prefix.lower()
+
+    for file_path in candidate_files:
         suffix = file_path.suffix.lower()
         if not suffix:
             suffix = ""
-        target_name = f"{prefix}_{index:0{digits}d}{suffix}"
-        index += 1
+        stem = file_path.stem
+        index_value: Optional[int] = None
+        stem_lower = stem.lower()
+        if stem_lower.startswith(prefix_lower + "_"):
+            numeric_part = stem[len(prefix) + 1 :]
+            if numeric_part.isdigit():
+                index_value = int(numeric_part)
+
+        expected_name = None
+        if index_value is not None and index_value > 0:
+            expected_name = f"{prefix}_{index_value:0{digits}d}{suffix}"
+
+        if (
+            index_value is not None
+            and index_value > 0
+            and expected_name is not None
+            and file_path.name == expected_name
+            and index_value not in used_indices
+        ):
+            used_indices.add(index_value)
+            continue
+
+        to_rename.append((file_path, suffix, index_value))
+
+    def allocate_index(preferred: Optional[int]) -> int:
+        if preferred is not None and preferred > 0 and preferred not in used_indices:
+            used_indices.add(preferred)
+            return preferred
+        candidate = 1
+        while candidate in used_indices:
+            candidate += 1
+        used_indices.add(candidate)
+        return candidate
+
+    for file_path, suffix, preferred_index in to_rename:
+        new_index = allocate_index(preferred_index)
+        target_name = f"{prefix}_{new_index:0{digits}d}{suffix}"
         if file_path.name == target_name:
             continue
         target_path = file_path.with_name(target_name)
         operations.append((file_path, target_path))
+
     return operations
 
 
@@ -368,9 +418,17 @@ def convert_videos(
 
 def main() -> None:
     args = parse_args()
-    dataset_root = args.dataset_root.resolve()
-    if not dataset_root.exists():
-        print(f"Dataset root not found: {dataset_root}", file=sys.stderr)
+    dataset_roots = args.dataset_roots or list(DEFAULT_DATASET_ROOTS)
+    resolved_roots: List[Path] = []
+    for root in dataset_roots:
+        resolved = root.resolve()
+        if not resolved.exists():
+            print(f"Dataset root not found, skipping: {resolved}", file=sys.stderr)
+            continue
+        resolved_roots.append(resolved)
+
+    if not resolved_roots:
+        print("No valid dataset roots to process.", file=sys.stderr)
         sys.exit(1)
 
     try:
@@ -385,47 +443,96 @@ def main() -> None:
     video_format = (args.video_format or "").strip().lstrip(".").lower()
     video_suffix = f".{video_format}" if video_format else None
 
+    root_summaries: List[Dict[str, Any]] = []
     all_operations: List[Tuple[Path, Path]] = []
-    for media_dir in iter_media_directories(dataset_root):
-        operations = compute_operations(media_dir)
-        if operations:
-            all_operations.extend(operations)
+    all_resize_tasks: List[Tuple[Path, Path, Tuple[int, int], Tuple[int, int]]] = []
+    all_photo_conversions: List[Tuple[Path, Path]] = []
+    all_video_conversions: List[Tuple[Path, Path]] = []
 
-    rename_map: Dict[Path, Path] = {src: dst for src, dst in all_operations}
-    resize_tasks = plan_photo_resizes(dataset_root, rename_map, max_width, max_height)
-    photo_conversions = plan_photo_conversions(dataset_root, rename_map, photo_suffix)
-    video_conversions = plan_video_conversions(dataset_root, rename_map, video_suffix)
+    for dataset_root in resolved_roots:
+        operations: List[Tuple[Path, Path]] = []
+        for media_dir in iter_media_directories(dataset_root):
+            operations.extend(compute_operations(media_dir))
 
-    if not all_operations and not resize_tasks and not photo_conversions and not video_conversions:
+        rename_map: Dict[Path, Path] = {src: dst for src, dst in operations}
+        resize_tasks = plan_photo_resizes(dataset_root, rename_map, max_width, max_height)
+        photo_conversions = plan_photo_conversions(dataset_root, rename_map, photo_suffix)
+        video_conversions = plan_video_conversions(dataset_root, rename_map, video_suffix)
+
+        root_summaries.append(
+            {
+                "root": dataset_root,
+                "operations": operations,
+                "resize_tasks": resize_tasks,
+                "photo_conversions": photo_conversions,
+                "video_conversions": video_conversions,
+            }
+        )
+
+        all_operations.extend(operations)
+        all_resize_tasks.extend(resize_tasks)
+        all_photo_conversions.extend(photo_conversions)
+        all_video_conversions.extend(video_conversions)
+
+    if not all_operations and not all_resize_tasks and not all_photo_conversions and not all_video_conversions:
         print("All filenames, photo resolutions, and media formats already match the expected scheme. Nothing to do.")
         return
 
-    if all_operations:
-        print("Planned renames:")
-        for src, dst in all_operations:
-            rel_src = src.relative_to(dataset_root)
-            rel_dst = dst.relative_to(dataset_root)
-            print(f"  {rel_src} -> {rel_dst}")
+    any_header_printed = False
+    for summary in root_summaries:
+        dataset_root = summary["root"]
+        operations = summary["operations"]
+        resize_tasks = summary["resize_tasks"]
+        photo_conversions = summary["photo_conversions"]
+        video_conversions = summary["video_conversions"]
 
-    if resize_tasks:
-        print("\nPhoto resize candidates:")
-        for _, target_path, (width, height), (new_width, new_height) in resize_tasks:
-            rel_path = target_path.relative_to(dataset_root)
-            print(f"  {rel_path}: {width}x{height} -> {new_width}x{new_height}")
+        header_printed = False
+        if operations:
+            if not header_printed:
+                prefix = "\n" if any_header_printed else ""
+                print(f"{prefix}[{dataset_root}]")
+                header_printed = True
+                any_header_printed = True
+            print("Planned renames:")
+            for src, dst in operations:
+                rel_src = src.relative_to(dataset_root)
+                rel_dst = dst.relative_to(dataset_root)
+                print(f"  {rel_src} -> {rel_dst}")
 
-    if photo_conversions:
-        print("\nPhoto format conversions:")
-        for current_path, target_path in photo_conversions:
-            rel_current = current_path.relative_to(dataset_root)
-            rel_target = target_path.relative_to(dataset_root)
-            print(f"  {rel_current} -> {rel_target}")
+        if resize_tasks:
+            if not header_printed:
+                prefix = "\n" if any_header_printed else ""
+                print(f"{prefix}[{dataset_root}]")
+                header_printed = True
+                any_header_printed = True
+            print("\nPhoto resize candidates:")
+            for _, target_path, (width, height), (new_width, new_height) in resize_tasks:
+                rel_path = target_path.relative_to(dataset_root)
+                print(f"  {rel_path}: {width}x{height} -> {new_width}x{new_height}")
 
-    if video_conversions:
-        print("\nVideo format conversions:")
-        for current_path, target_path in video_conversions:
-            rel_current = current_path.relative_to(dataset_root)
-            rel_target = target_path.relative_to(dataset_root)
-            print(f"  {rel_current} -> {rel_target}")
+        if photo_conversions:
+            if not header_printed:
+                prefix = "\n" if any_header_printed else ""
+                print(f"{prefix}[{dataset_root}]")
+                header_printed = True
+                any_header_printed = True
+            print("\nPhoto format conversions:")
+            for current_path, target_path in photo_conversions:
+                rel_current = current_path.relative_to(dataset_root)
+                rel_target = target_path.relative_to(dataset_root)
+                print(f"  {rel_current} -> {rel_target}")
+
+        if video_conversions:
+            if not header_printed:
+                prefix = "\n" if any_header_printed else ""
+                print(f"{prefix}[{dataset_root}]")
+                header_printed = True
+                any_header_printed = True
+            print("\nVideo format conversions:")
+            for current_path, target_path in video_conversions:
+                rel_current = current_path.relative_to(dataset_root)
+                rel_target = target_path.relative_to(dataset_root)
+                print(f"  {rel_current} -> {rel_target}")
 
     if not args.apply:
         print("\nDry-run complete. Re-run with --apply to perform these changes.")
@@ -435,16 +542,16 @@ def main() -> None:
         execute_operations(all_operations)
         print("\nRenaming complete.")
 
-    if resize_tasks:
-        resize_photos(resize_tasks, quality=args.photo_quality)
+    if all_resize_tasks:
+        resize_photos(all_resize_tasks, quality=args.photo_quality)
         print("Photo resizing complete.")
 
-    if photo_conversions:
-        convert_photos(photo_conversions, quality=args.photo_quality)
+    if all_photo_conversions:
+        convert_photos(all_photo_conversions, quality=args.photo_quality)
         print("Photo format conversion complete.")
 
-    if video_conversions:
-        convert_videos(video_conversions)
+    if all_video_conversions:
+        convert_videos(all_video_conversions)
         print("Video format conversion complete.")
 
 

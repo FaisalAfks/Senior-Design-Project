@@ -24,6 +24,7 @@ def _ensure_project_on_path() -> None:
 _ensure_project_on_path()
 
 from BlazeFace.detector import BlazeFaceDetector
+from utils.paths import dataset_path
 from utils.orientation import (
     DEFAULT_ORIENTATION_CATEGORIES,
     OrientationFeatures,
@@ -35,8 +36,8 @@ from utils.orientation import (
 )
 
 DATASET_KNOWN_ROOTS: Tuple[Path, ...] = (
-    PROJECT_ROOT / "Dataset" / "Validation" / "Known",
-    PROJECT_ROOT / "Dataset" / "Testing" / "Known",
+    dataset_path("Validation", "Known"),
+    dataset_path("Testing", "Known"),
 )
 FACEBANK_ROOT = PROJECT_ROOT / "Facebank"
 VIDEO_EXTENSIONS: Sequence[str] = (".mp4", ".mov", ".avi", ".mkv", ".webm")

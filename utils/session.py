@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -20,6 +20,7 @@ class SessionCycle:
     observations: List[FaceObservation]
     last_frame: Optional[np.ndarray]
     duration: float
+    metrics: Dict[str, float]
 
 
 class SessionRunner:
@@ -38,6 +39,10 @@ class SessionRunner:
         guidance_min_side: int,
         guidance_box_scale: float,
         frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+        guidance_display_callback: Optional[Callable[[np.ndarray], None]] = None,
+        verification_display_callback: Optional[Callable[[np.ndarray], None]] = None,
+        poll_cancel_callback: Optional[Callable[[], bool]] = None,
+        wait_for_next_callback: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.capture = capture
         self.detector = detector
@@ -50,6 +55,11 @@ class SessionRunner:
         self.guidance_box_scale = guidance_box_scale
         self.window_adjusted = False
         self.frame_transform = frame_transform
+        self._guidance_shape: Optional[Tuple[int, int]] = None
+        self._guidance_display_callback = guidance_display_callback
+        self._verification_display_callback = verification_display_callback
+        self._poll_cancel_callback = poll_cancel_callback
+        self._wait_for_next_callback = wait_for_next_callback
 
     def run_cycle(
         self,
@@ -64,16 +74,14 @@ class SessionRunner:
                 self.capture,
                 self.detector,
                 self.args,
-                self.window_name,
-                allow_resize=not self.window_adjusted,
                 min_side=self.guidance_min_side,
                 box_scale=self.guidance_box_scale,
-                window_limits=self.window_limits,
                 frame_transform=self.frame_transform,
+                display_callback=self._display_guidance_frame,
+                poll_cancel=self._poll_guidance_cancel,
             )
             if not proceed:
                 return None
-            self.window_adjusted = True
         else:
             if not self.window_adjusted:
                 adjust_window_to_capture(self.capture, self.window_name, self.window_limits)
@@ -81,7 +89,7 @@ class SessionRunner:
         if on_activity_change is not None:
             on_activity_change("verification")
 
-        observations, last_frame, duration = run_verification_phase(
+        observations, last_frame, duration, metrics = run_verification_phase(
             self.capture,
             self.detector,
             self.recogniser,
@@ -89,18 +97,57 @@ class SessionRunner:
             self.args.spoof_thr,
             self.window_name,
             self.args.evaluation_duration,
+            mode=self.args.evaluation_mode,
+            frame_limit=self.args.evaluation_frames,
             frame_transform=self.frame_transform,
+            display_callback=self._display_verification_frame,
+            poll_cancel=self._poll_guidance_cancel,
+            collect_timings=True,
         )
-        return SessionCycle(observations=observations, last_frame=last_frame, duration=duration)
+        return SessionCycle(observations=observations, last_frame=last_frame, duration=duration, metrics=metrics)
 
     def wait_for_next_person(self) -> bool:
         """Return True to continue, False to exit."""
+        if self._wait_for_next_callback is not None:
+            return bool(self._wait_for_next_callback())
         while True:
             key = cv2.waitKey(0) & 0xFF
             if key == ord(" "):
                 return True
             if key in (27, ord("q")):
                 return False
+
+    def _display_guidance_frame(self, frame: np.ndarray) -> None:
+        """Render a guidance frame inside the shared OpenCV window."""
+        if self._guidance_display_callback is not None:
+            self._guidance_display_callback(frame.copy())
+            return
+        height, width = frame.shape[:2]
+        shape = (height, width)
+        if self._guidance_shape != shape:
+            target_w = min(width, self.window_limits[0])
+            target_h = min(height, self.window_limits[1])
+            cv2.resizeWindow(self.window_name, target_w, target_h)
+            self.window_adjusted = True
+            self._guidance_shape = shape
+        cv2.imshow(self.window_name, frame)
+
+    def _display_verification_frame(self, frame: np.ndarray) -> None:
+        if self._verification_display_callback is not None:
+            self._verification_display_callback(frame.copy())
+            return
+        height, width = frame.shape[:2]
+        if not self.window_adjusted:
+            adjust_window_to_capture(self.capture, self.window_name, self.window_limits)
+            self.window_adjusted = True
+        cv2.imshow(self.window_name, frame)
+
+    def _poll_guidance_cancel(self) -> bool:
+        """Return True when the operator cancels guidance from the OpenCV window."""
+        if self._poll_cancel_callback is not None:
+            return bool(self._poll_cancel_callback())
+        key = cv2.waitKey(1) & 0xFF
+        return key in (27, ord("q"))
 
 
 def adjust_window_to_capture(
