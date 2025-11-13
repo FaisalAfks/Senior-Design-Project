@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from BlazeFace import BlazeFaceService, Detection
+from utils.overlay import BannerStyle, draw_center_banner
 from .orientation import compute_orientation
 
 
@@ -85,6 +86,10 @@ def evaluate_alignment(
     )
 
 
+GUIDANCE_TOP_STYLE = BannerStyle(bg_color=(20, 20, 20), text_color=(255, 255, 255), alpha=0.7, font_scale=0.7, margin=24)
+GUIDANCE_BOTTOM_STYLE = BannerStyle(bg_color=(0, 0, 0), text_color=(255, 255, 255), alpha=0.75, font_scale=0.8, margin=32)
+
+
 def draw_guidance_overlay(
     frame: np.ndarray,
     *,
@@ -92,6 +97,8 @@ def draw_guidance_overlay(
     half_side: int,
     detection: Optional[Detection],
     assessment: Optional[AlignmentAssessment],
+    consecutive_good: int,
+    hold_frames: int,
 ) -> np.ndarray:
     display = frame.copy()
     height, width = display.shape[:2]
@@ -105,56 +112,69 @@ def draw_guidance_overlay(
 
     cv2.rectangle(display, (left, top), (right, bottom), (0, 255, 0), 4, cv2.LINE_AA)
 
-    if detection is None or assessment is None:
-        cv2.putText(display, "No face detected", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+    if detection is None:
+        display = draw_center_banner(
+            display,
+            "No face detected",
+            position="top",
+            style=GUIDANCE_TOP_STYLE,
+        )
         return display
 
-    status_color = (0, 255, 0) if assessment.is_aligned else (0, 0, 255)
-    cv2.putText(
-        display,
-        f"Tilt: {assessment.angle_deg:.1f} deg",
-        (20, height - 20),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        status_color,
-        2,
+    if assessment is None:
+        return display
+
+    instruction = _instruction_message(
+        detection,
+        assessment,
+        consecutive_good,
+        hold_frames,
     )
 
-    messages = assessment.messages if not assessment.is_aligned else []
-    if messages:
-        y_offset = 70
-        for message in messages:
-            cv2.putText(
-                display,
-                message,
-                (20, y_offset),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                status_color,
-                2,
-            )
-            y_offset += 28
+    if instruction:
+        display = draw_center_banner(
+            display,
+            instruction,
+            position="bottom",
+            style=GUIDANCE_BOTTOM_STYLE,
+        )
 
     return display
+
+
+def _instruction_message(
+    detection: Optional[Detection],
+    assessment: Optional[AlignmentAssessment],
+    consecutive_good: int,
+    hold_frames: int,
+) -> str:
+    if detection is None or assessment is None:
+        return ""
+    if assessment.is_aligned:
+        progress = f"{min(consecutive_good, hold_frames)}/{hold_frames}"
+        return f"Hold steady... ({progress})"
+    message = (assessment.messages or ["Adjust your position"])[0]
+    return message
 
 
 def run_guidance_phase(
     capture: cv2.VideoCapture,
     detector: BlazeFaceService,
     args,
-    window_name: str,
     *,
-    allow_resize: bool,
     min_side: int,
     box_scale: float,
-    window_limits: Tuple[int, int],
     frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    display_callback: Optional[Callable[[np.ndarray], None]] = None,
+    poll_cancel: Optional[Callable[[], bool]] = None,
 ) -> bool:
+    """Drive the alignment logic independent of any specific UI."""
     consecutive_good = 0
-    window_resized = False
-    width_limit, height_limit = window_limits
+    hold_frames = max(1, getattr(args, "guidance_hold_frames", 1))
 
     while True:
+        if poll_cancel is not None and poll_cancel():
+            return False
         ok, frame = capture.read()
         if not ok:
             return False
@@ -175,12 +195,6 @@ def run_guidance_phase(
             side = max(min_required_side, side - 1)
         half_side = max(20, side // 2)
         box_center = (width // 2, height // 2)
-
-        if allow_resize and not window_resized:
-            target_w = min(width, width_limit)
-            target_h = min(height, height_limit)
-            cv2.resizeWindow(window_name, target_w, target_h)
-            window_resized = True
 
         detections = detector.detect(frame)
         detection = max(detections, key=lambda det: det.score * max(det.area(), 1.0)) if detections else None
@@ -204,46 +218,15 @@ def run_guidance_phase(
             half_side=half_side,
             detection=detection,
             assessment=assessment,
+            consecutive_good=consecutive_good,
+            hold_frames=hold_frames,
         )
-        instruction_lines: List[Tuple[str, Tuple[int, int, int], float]] = []
-        # Only show the alignment prompt when a face is detected to avoid
-        # overlapping with the built-in "No face detected" banner.
-        if detection is not None:
-            instruction_lines.append(("Align your face within the square", (255, 255, 255), 0.8))
 
-        if detection is None:
-            instruction_lines.append(("Face not detected, center yourself", (0, 0, 255), 0.7))
-            instruction_lines.append(("Look toward the camera", (0, 0, 255), 0.7))
-        elif assessment is not None:
-            if assessment.is_aligned:
-                instruction_lines.append(("Hold steady to confirm", (0, 255, 0), 0.75))
-                instruction_lines.append((f"Progress: {consecutive_good}/{args.guidance_hold_frames}", (0, 255, 0), 0.7))
-            else:
-                messages = assessment.messages or ["Adjust your position"]
-                for msg in messages:
-                    instruction_lines.append((msg, (0, 165, 255), 0.7))
-                instruction_lines.append((f"Progress: {consecutive_good}/{args.guidance_hold_frames}", (0, 165, 255), 0.7))
-        else:
-            instruction_lines.append(("Detecting face...", (0, 165, 255), 0.7))
+        if display_callback is not None:
+            display_callback(display)
 
-        # If no face was detected, `draw_guidance_overlay` already printed
-        # "No face detected" at y=40; offset subsequent instructions.
-        base_y = 80 if detection is None else 40
-        line_spacing = 28
-        for text, color, scale in instruction_lines:
-            # Center the primary alignment prompt at the top of the window.
-            if text == "Align your face within the square":
-                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
-                text_x = max(20, (display.shape[1] - tw) // 2)
-            else:
-                text_x = 20
-            cv2.putText(display, text, (text_x, base_y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
-            base_y += int(line_spacing * scale / 0.7)
-
-        cv2.imshow(window_name, display)
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord("q")):
+        if poll_cancel is not None and poll_cancel():
             return False
 
-        if consecutive_good >= args.guidance_hold_frames:
+        if consecutive_good >= hold_frames:
             return True
