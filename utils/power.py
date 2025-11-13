@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:  # pragma: no cover - optional dependency
     from jtop import jtop as _jtop_context  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     _jtop_context = None
+
+SOC_RAIL_TOKENS = ("CPU", "GPU", "SOC", "CV")
 
 
 def _scaled(value: Any, scale: float) -> Optional[float]:
@@ -19,6 +23,13 @@ def _scaled(value: Any, scale: float) -> Optional[float]:
         return None
     try:
         return float(value) / scale
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -36,6 +47,20 @@ class ChannelReading:
 
 
 @dataclass
+class ProcessPowerBreakdown:
+    pid: Optional[int]
+    name: Optional[str]
+    user: Optional[str]
+    cpu_percent: Optional[float]
+    ram_mb: Optional[float]
+    gpu_mem_mb: Optional[float]
+    cpu_share: Optional[float]
+    gpu_share: Optional[float]
+    estimated_power_w: Optional[float]
+    method: str
+
+
+@dataclass
 class PowerSample:
     timestamp: float
     activity: str
@@ -43,7 +68,9 @@ class PowerSample:
     total_name: Optional[str]
     total_power_w: Optional[float]
     total_avg_power_w: Optional[float]
-    rails: List[ChannelReading]
+    soc_power_w: Optional[float] = None
+    process: Optional[ProcessPowerBreakdown] = None
+    rails: List[ChannelReading] = field(default_factory=list)
 
 
 class JetsonPowerLogger:
@@ -56,6 +83,10 @@ class JetsonPowerLogger:
         log_path: Path,
         sample_interval: float = 1.0,
         verbose: bool = True,
+        process_pid: Optional[int] = None,
+        process_name: Optional[str] = None,
+        process_cpu_weight: float = 0.6,
+        process_gpu_weight: float = 0.4,
     ) -> None:
         self._requested = enabled
         self.available = _jtop_context is not None
@@ -64,6 +95,15 @@ class JetsonPowerLogger:
         self.sample_interval = max(sample_interval, 0.1)
         self.verbose = verbose
         self._last_error: Optional[str] = None
+        self.process_pid = process_pid if process_pid is not None else os.getpid()
+        script_name = sys.argv[0] if sys.argv else ""
+        default_process_name = Path(script_name).stem if script_name else "process"
+        self.process_name = process_name or default_process_name or "process"
+        self.process_cpu_weight = max(0.0, process_cpu_weight)
+        self.process_gpu_weight = max(0.0, process_gpu_weight)
+        if self.process_cpu_weight == 0.0 and self.process_gpu_weight == 0.0:
+            self.process_cpu_weight = 1.0
+        self._process_error_reported = False
 
         if self._requested and not self.enabled and self.verbose:
             if _jtop_context is None:
@@ -126,6 +166,12 @@ class JetsonPowerLogger:
         self._record_activity_event(activity, timestamp)
         if self.verbose:
             print(f"[Power] Activity -> {activity}")
+
+    def set_process_target(self, pid: Optional[int], name: Optional[str] = None) -> None:
+        """Update the process that should be tracked for power attribution."""
+        self.process_pid = pid
+        if name:
+            self.process_name = name
 
     def update_metadata(self, **fields: Any) -> None:
         """Merge custom fields into the metadata block for the final log."""
@@ -213,7 +259,129 @@ class JetsonPowerLogger:
         snapshot.timestamp = timestamp
         snapshot.activity = activity
         snapshot.elapsed_s = elapsed
+        snapshot.soc_power_w = self._estimate_soc_power(snapshot.rails)
+        snapshot.process = self._build_process_breakdown(jetson, snapshot.soc_power_w)
         return snapshot
+
+    def _estimate_soc_power(self, rails: List[ChannelReading]) -> Optional[float]:
+        if not rails:
+            return None
+        total = 0.0
+        matched = False
+        for reading in rails:
+            if reading.power_w is None or not reading.rail:
+                continue
+            label = reading.rail.upper()
+            if any(token in label for token in SOC_RAIL_TOKENS):
+                total += reading.power_w
+                matched = True
+        return total if matched else None
+
+    def _build_process_breakdown(
+        self,
+        jetson,
+        soc_power_w: Optional[float],
+    ) -> Optional[ProcessPowerBreakdown]:
+        pid = self.process_pid
+        if pid is None:
+            return None
+        breakdown = ProcessPowerBreakdown(
+            pid=pid,
+            name=self.process_name,
+            user=None,
+            cpu_percent=None,
+            ram_mb=None,
+            gpu_mem_mb=None,
+            cpu_share=None,
+            gpu_share=None,
+            estimated_power_w=None,
+            method="no-process-data",
+        )
+        try:
+            processes = list(jetson.processes or [])
+            if self._process_error_reported:
+                self._process_error_reported = False
+        except Exception as exc:  # pragma: no cover - requires hardware
+            if not self._process_error_reported and self.verbose:
+                print(f"[Power] Unable to query jtop processes: {exc}")
+                self._process_error_reported = True
+            breakdown.method = "process-read-error"
+            return breakdown
+
+        if not processes:
+            return breakdown
+
+        target_entry = None
+        for proc in processes:
+            if not proc:
+                continue
+            try:
+                proc_pid = int(proc[0])
+            except (TypeError, ValueError):
+                continue
+            if proc_pid == pid:
+                target_entry = proc
+                break
+
+        if target_entry is None:
+            breakdown.method = "process-not-found"
+            return breakdown
+
+        breakdown.method = "stats-only"
+        breakdown.user = target_entry[1] if len(target_entry) > 1 else None
+        cpu_percent = _to_float(target_entry[6]) if len(target_entry) > 6 else None
+        ram_kb = _to_float(target_entry[7]) if len(target_entry) > 7 else None
+        gpu_kb = _to_float(target_entry[8]) if len(target_entry) > 8 else None
+        breakdown.cpu_percent = cpu_percent
+        breakdown.ram_mb = (ram_kb / 1024.0) if ram_kb is not None else None
+        breakdown.gpu_mem_mb = (gpu_kb / 1024.0) if gpu_kb is not None else None
+
+        cpu_total = 0.0
+        gpu_total_kb = 0.0
+        for proc in processes:
+            if len(proc) > 6:
+                value = _to_float(proc[6])
+                if value is not None:
+                    cpu_total += max(0.0, value)
+            if len(proc) > 8:
+                value = _to_float(proc[8])
+                if value is not None:
+                    gpu_total_kb += max(0.0, value)
+
+        cpu_share = None
+        if cpu_percent is not None and cpu_total > 0:
+            cpu_share = max(0.0, min(1.0, cpu_percent / cpu_total))
+        gpu_share = None
+        if gpu_kb is not None and gpu_total_kb > 0:
+            gpu_share = max(0.0, min(1.0, gpu_kb / gpu_total_kb))
+
+        breakdown.cpu_share = cpu_share
+        breakdown.gpu_share = gpu_share
+
+        weighted_components: List[Tuple[float, float]] = []
+        if cpu_share is not None and self.process_cpu_weight > 0:
+            weighted_components.append((cpu_share, self.process_cpu_weight))
+        if gpu_share is not None and self.process_gpu_weight > 0:
+            weighted_components.append((gpu_share, self.process_gpu_weight))
+
+        if not weighted_components:
+            breakdown.method = "insufficient-metrics"
+            return breakdown
+
+        if soc_power_w is None:
+            breakdown.method = "no-soc-power"
+            return breakdown
+
+        denom = sum(weight for _, weight in weighted_components)
+        if denom <= 0:
+            breakdown.method = "insufficient-metrics"
+            return breakdown
+
+        combined_share = sum(share * weight for share, weight in weighted_components) / denom
+        combined_share = max(0.0, min(1.0, combined_share))
+        breakdown.estimated_power_w = soc_power_w * combined_share
+        breakdown.method = "cpu-gpu-weighted"
+        return breakdown
 
     def _read_jtop_power(self, jetson) -> Optional[PowerSample]:
         stats = jetson.power

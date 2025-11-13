@@ -7,3 +7,7 @@ Facebank/*
 !Facebank/facebank.pth
 !Facebank/names.npy
 SDP.code-workspace
+logs/*
+!logs/.gitkeep
+app_settings.json
+dashboard_settings.json

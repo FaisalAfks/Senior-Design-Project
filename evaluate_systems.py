@@ -52,34 +52,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate detector, recogniser, and anti-spoof models.")
     default_validation_root = dataset_path("Validation")
     default_testing_root = dataset_path("Testing")
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=default_validation_root,
-        help=f"Validation dataset root (default: {default_validation_root}).",
-    )
-    parser.add_argument(
-        "--testing-root",
-        type=Path,
-        default=default_testing_root,
-        help=f"Testing dataset root for final evaluation (default: {default_testing_root}).",
-    )
+    parser.add_argument("--dataset-root", type=Path, default=default_validation_root, help=f"Validation dataset root (default: {default_validation_root}).")
+    parser.add_argument("--testing-root", type=Path, default=default_testing_root, help=f"Testing dataset root for final evaluation (default: {default_testing_root}).")
     parser.add_argument("--device", default="cpu", help="Torch device string (cpu, cuda, cuda:0, ...).")
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="Path to MobileFaceNet weights.")
     parser.add_argument("--facebank", type=Path, default=DEFAULT_FACEBANK, help="Path to facebank directory.")
     parser.add_argument("--spoof-weights", type=Path, default=DEFAULT_SPOOF_WEIGHTS, help="Path to DeePixBiS weights.")
     parser.add_argument("--detector-thr", type=float, default=0.7, help="Minimum BlazeFace detection confidence.")
-    parser.add_argument("--max-video-frames", type=int, default=15, help="Maximum number of frames to sample per video.")
+    parser.add_argument("--max-video-frames", type=int, default=10, help="Maximum number of frames to sample per video.")
     parser.add_argument("--detector-thresholds", default="0.5:0.9:0.05", help="Detection thresholds as comma list or range start:end:step (default 0.4:0.9:0.05).")
     parser.add_argument("--recognition-thresholds", default="0.5:0.9:0.02", help="Recognition thresholds as comma list or range start:end:step (default 0.5:0.9:0.05).")
     parser.add_argument("--spoof-thresholds", default="0.5:0.9:0.02", help="Spoof thresholds as comma list or range start:end:step (default 0.5:0.9:0.05).")
-    default_summary_output = logs_path("evaluation_summary.json")
-    parser.add_argument(
-        "--summary-output",
-        type=Path,
-        default=default_summary_output,
-        help=f"Output path for combined evaluation summary (default: {default_summary_output}).",
-    )
+    default_summary_output = logs_path("model_evaluation_summary.json")
+    parser.add_argument("--summary-output", type=Path, default=default_summary_output, help=f"Output path for combined evaluation summary (default: {default_summary_output}).")
     return parser.parse_args()
 
 
@@ -292,7 +277,14 @@ def evaluate_dataset(
     return results
 
 
-def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> Dict[str, Optional[float]]:
+def compute_metrics(
+    tp: int,
+    fp: int,
+    tn: int,
+    fn: int,
+    *,
+    include_pad_metrics: bool = False,
+) -> Dict[str, Optional[float]]:
     total = tp + fp + tn + fn
     metrics: Dict[str, Optional[float]] = {}
     metrics["accuracy"] = (tp + tn) / total if total else None
@@ -320,6 +312,16 @@ def compute_metrics(tp: int, fp: int, tn: int, fn: int) -> Dict[str, Optional[fl
     else:
         metrics["eer"] = None
         metrics["eer_gap"] = None
+    if include_pad_metrics:
+        attack_total = tn + fp
+        apcer = fp / attack_total if attack_total else None
+        bpcer = fn / positive if positive else None
+        metrics["apcer"] = apcer
+        metrics["bpcer"] = bpcer
+        if apcer is not None and bpcer is not None:
+            metrics["acer"] = (apcer + bpcer) / 2.0
+        else:
+            metrics["acer"] = None
     return metrics
 
 
@@ -332,6 +334,7 @@ def make_confusion_matrices(
     dataset_root: Path,
     positive_label: str,
     negative_label: str,
+    include_pad_metrics: bool = False,
 ) -> List[Dict[str, object]]:
     matrices: List[Dict[str, object]] = []
     for threshold in thresholds:
@@ -353,7 +356,7 @@ def make_confusion_matrices(
                 false_pos.append(_misclassified_entry(result, dataset_root, score, threshold, expected_positive, positive_label, negative_label))
             else:
                 tn += 1
-        metrics = compute_metrics(tp, fp, tn, fn)
+        metrics = compute_metrics(tp, fp, tn, fn, include_pad_metrics=include_pad_metrics)
         matrices.append(
             {
                 "threshold": float(threshold),
@@ -443,6 +446,14 @@ def select_best_spoof_threshold(
         if total == 0:
             continue
         accuracy = (total_tp + total_tn) / total
+        combined_positive = (print_counts["tp"] + print_counts["fn"]) + (replay_counts["tp"] + replay_counts["fn"])
+        combined_fn = print_counts["fn"] + replay_counts["fn"]
+        bpcer = combined_fn / combined_positive if combined_positive else None
+        apcer_print = print_lookup[threshold]["metrics"].get("apcer")
+        apcer_replay = replay_lookup[threshold]["metrics"].get("apcer")
+        apcer_candidates = [value for value in (apcer_print, apcer_replay) if value is not None]
+        apcer_max = max(apcer_candidates) if apcer_candidates else None
+        acer = (apcer_max + bpcer) / 2.0 if apcer_max is not None and bpcer is not None else None
         if (
             best_threshold is None
             or accuracy > (best_accuracy or float("-inf"))
@@ -458,6 +469,11 @@ def select_best_spoof_threshold(
                 "combined_accuracy": accuracy,
                 "print_metrics": print_lookup[threshold]["metrics"],
                 "replay_metrics": replay_lookup[threshold]["metrics"],
+                "combined_metrics": {
+                    "apcer_max": apcer_max,
+                    "bpcer": bpcer,
+                    "acer": acer,
+                },
             }
     if best_threshold is None or best_payload is None:
         return None
@@ -557,7 +573,7 @@ def evaluate_pipeline(
         else:
             tn += 1
 
-    metrics = compute_metrics(tp, fp, tn, fn)
+    metrics = compute_metrics(tp, fp, tn, fn, include_pad_metrics=use_spoof)
     return {
         "thresholds": {
             "detection": detection_threshold,
@@ -684,6 +700,7 @@ def main() -> None:
         dataset_root=args.dataset_root,
         positive_label="real",
         negative_label="spoof",
+        include_pad_metrics=True,
     )
     spoof_replay_confusions = make_confusion_matrices(
         validation_replay_results,
@@ -693,6 +710,7 @@ def main() -> None:
         dataset_root=args.dataset_root,
         positive_label="real",
         negative_label="spoof",
+        include_pad_metrics=True,
     )
 
     detection_best = select_best_by_accuracy(detection_confusions)

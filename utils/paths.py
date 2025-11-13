@@ -8,7 +8,7 @@ from typing import List
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGS_ROOT = PROJECT_ROOT / "logs"
 _DATASET_ENV_VAR = "SDP_DATASET_ROOT"
-_GOOGLE_DRIVE_DATASET = Path(r"H:\My Drive\Senior Design Project\Dataset")
+_GOOGLE_DRIVE_DATASET = Path(r"U:\My Drive\Senior Design Project\Dataset")
 
 
 def _candidate_dataset_roots() -> List[Path]:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Plot metrics or Jetson power telemetry stored in JSON files."""
 from __future__ import annotations
 
@@ -268,6 +268,8 @@ def render_confusion_matrix(
         ("tnr", "TNR"),
         ("fpr", "FPR"),
         ("fnr", "FNR"),
+        ("apcer", "APCER"),
+        ("bpcer", "BPCER"),
         ("f1", "F1"),
         ("eer", "EER"),
     ]
@@ -339,11 +341,17 @@ def render_accuracy_plot(
         return None
 
     sample_size: Optional[int] = None
+    positive_count: Optional[int] = None
+    attack_count: Optional[int] = None
     for _, entries in filtered_series:
         if entries:
             counts = entries[0].get("counts")
             if counts:
                 sample_size = sum(counts.values())
+                pos = counts.get("tp", 0) + counts.get("fn", 0)
+                neg = counts.get("tn", 0) + counts.get("fp", 0)
+                positive_count = pos if pos > 0 else None
+                attack_count = neg if neg > 0 else None
             break
 
     fig, ax = plt.subplots(figsize=(9.5, 6.0))
@@ -360,6 +368,7 @@ def render_accuracy_plot(
         accuracy_vals: List[float] = []
         fpr_vals: List[float] = []
         fnr_vals: List[float] = []
+
         for threshold in threshold_values:
             metrics = lookup.get(threshold, {}).get("metrics", {})
             accuracy = metrics.get("accuracy")
@@ -437,18 +446,6 @@ def render_accuracy_plot(
     extra_info_parts = normalised_info
     fig.suptitle(main_title or "")
 
-    fpr_values: List[float] = []
-    fnr_values: List[float] = []
-    for _, entries in filtered_series:
-        for entry in entries:
-            metrics = entry.get("metrics", {})
-            fpr = metrics.get("fpr")
-            fnr = metrics.get("fnr")
-            if isinstance(fpr, (int, float)):
-                fpr_values.append(float(fpr))
-            if isinstance(fnr, (int, float)):
-                fnr_values.append(float(fnr))
-
     footer_lines: List[str] = []
     if extra_info_parts:
         footer_lines.append(" | ".join(extra_info_parts))
@@ -458,7 +455,7 @@ def render_accuracy_plot(
     if len(threshold_values) == 1:
         threshold_label = f"Threshold: {threshold_min:.4g}"
     else:
-        threshold_label = f"Threshold range: {threshold_min:.4g} – {threshold_max:.4g}"
+        threshold_label = f"Threshold range: {threshold_min:.4g} - {threshold_max:.4g}"
     footer_lines.append(threshold_label)
 
     supplements: List[str] = []
@@ -466,6 +463,10 @@ def render_accuracy_plot(
         supplements.append(sample_override)
     elif sample_size is not None:
         supplements.append(f"Samples: {sample_size}")
+    if positive_count is not None:
+        supplements.append(f"Real: {positive_count}")
+    if attack_count is not None:
+        supplements.append(f"Attacks: {attack_count}")
 
     step_value: Optional[float] = None
     if len(threshold_values) > 1:
@@ -482,6 +483,36 @@ def render_accuracy_plot(
 
     if supplements:
         footer_lines.append(" | ".join(supplements))
+
+    apcer_values: List[float] = []
+    bpcer_values: List[float] = []
+    for _, entries in filtered_series:
+        for entry in entries:
+            metrics = entry.get("metrics", {})
+            apcer = metrics.get("apcer")
+            bpcer = metrics.get("bpcer")
+            if isinstance(apcer, (int, float)):
+                apcer_values.append(float(apcer))
+            if isinstance(bpcer, (int, float)):
+                bpcer_values.append(float(bpcer))
+
+    def _format_metric_range(values: Sequence[float], label: str) -> Optional[str]:
+        clean = [val for val in values if isinstance(val, (int, float))]
+        if not clean:
+            return None
+        if len(clean) == 1:
+            return f"{label}: {clean[0]:.3f}"
+        return f"{label}: {min(clean):.3f}-{max(clean):.3f}"
+
+    pad_lines: List[str] = []
+    apcer_line = _format_metric_range(apcer_values, "APCER")
+    bpcer_line = _format_metric_range(bpcer_values, "BPCER")
+    if apcer_line:
+        pad_lines.append(apcer_line)
+    if bpcer_line:
+        pad_lines.append(bpcer_line)
+    if pad_lines:
+        footer_lines.append(" | ".join(pad_lines))
 
     if footer_lines:
         fig.text(
@@ -603,11 +634,11 @@ def render_power_plot(
         max_power = max(power_values)
         default_title = "Jetson Power Log"
         if descriptor:
-            default_title += f" · {descriptor}"
-        default_title += f" · avg={avg_power:.2f}W"
-        default_title += f" · min={min_power:.2f}W"
-        default_title += f" · max={max_power:.2f}W"
-        default_title += f" · points={len(power_values)}"
+            default_title += f" Â· {descriptor}"
+        default_title += f" Â· avg={avg_power:.2f}W"
+        default_title += f" Â· min={min_power:.2f}W"
+        default_title += f" Â· max={max_power:.2f}W"
+        default_title += f" Â· points={len(power_values)}"
         ax.set_title(default_title)
     else:
         ax.set_title(title)
@@ -958,7 +989,15 @@ def main() -> None:
                 target_path: Optional[Path] = None
                 if args.output_dir:
                     filename = f"{name}.png" if len(plot_figures) == 1 else f"{name}_{idx_fig + 1}.png"
-                    target_path = args.output_dir / filename
+                    bucket = "general"
+                    lowered = name.lower()
+                    if "validation" in lowered:
+                        bucket = "validation"
+                    elif "test" in lowered or "holdout" in lowered:
+                        bucket = "testing"
+                    bucket_dir = args.output_dir / bucket
+                    bucket_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = bucket_dir / filename
                 elif args.output:
                     target_path = args.output
 

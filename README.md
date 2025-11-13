@@ -93,13 +93,9 @@ Window Controls
 
 Output and Logging
 ------------------
-- Attendance results: appended to `logs/attendance_results.jsonl` (configurable via `--attendance-log`). Each JSON line includes:
-  - `timestamp` (UTC ISO8601)
-  - `source` (camera/video source)
-  - `recognized`, `identity`, `avg_identity_score`
-  - `avg_spoof_score`, `is_real`, `accepted`
-  - `frames_with_detections`
-  - `capture_duration` (true elapsed seconds for the verification phase)
+- Attendance results: appended to `logs/attendance_log.csv` (configurable via `--attendance-log`). Each row records
+  `timestamp`, `source`, `recognized`, `identity`, `avg_identity_score`, `avg_spoof_score`, `is_real`, `accepted`,
+  `frames_with_detections`, and `capture_duration`.
 
 Jetson Power Logging (Optional)
 -------------------------------
@@ -109,7 +105,12 @@ Jetson Power Logging (Optional)
 
 - Enable logging:
 
-    python main.py --enable-power-log --power-interval 1.0 --power-log logs/jetson_power_log.json
+    python main.py --enable-power-log --power-interval 1.0 --power-log logs/jetson_power_metrics.json
+
+- Each sample records both device-wide power and an estimate for this process:
+  - `total_power_w` / `total_avg_power_w` come directly from the jtop `VDD_IN` rail.
+  - `soc_power_w` sums CPU/GPU/SOC rails so you can see how much of the draw is going into computation.
+  - `process` contains the tracked PID, CPU%, RAM/GPU usage, the proportional shares, and `estimated_power_w`, which allocates the SoC wattage using the process' CPU/GPU utilisation mix (method field explains the fallback path).
 
 - You may also lock clocks for consistent latency (optional, requires sudo):
 
