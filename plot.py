@@ -952,20 +952,24 @@ def render_power_plot(
         descriptor_parts.append(descriptor)
     descriptor_text = " · ".join(descriptor_parts) if descriptor_parts else None
 
+    avg_power = sum(power_values) / len(power_values)
+    min_power = min(power_values)
+    max_power = max(power_values)
+    stats_parts = [
+        f"avg={avg_power:.2f}W",
+        f"min={min_power:.2f}W",
+        f"max={max_power:.2f}W",
+        f"points={len(power_values)}",
+    ]
+    stats_suffix = f" · {' · '.join(stats_parts)}" if stats_parts else ""
+
     if title is None:
-        avg_power = sum(power_values) / len(power_values)
-        min_power = min(power_values)
-        max_power = max(power_values)
         default_title = "Jetson Power Log"
         if descriptor_text:
             default_title += f" · {descriptor_text}"
-        default_title += f" · avg={avg_power:.2f}W"
-        default_title += f" · min={min_power:.2f}W"
-        default_title += f" · max={max_power:.2f}W"
-        default_title += f" · points={len(power_values)}"
-        ax.set_title(default_title)
+        ax.set_title(f"{default_title}{stats_suffix}")
     else:
-        ax.set_title(title)
+        ax.set_title(f"{title}{stats_suffix}")
 
     segments = _build_activity_segments(metadata, samples, times)
     if segments:

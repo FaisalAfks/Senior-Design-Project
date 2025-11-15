@@ -1,0 +1,1296 @@
+{
+  "version": 2,
+  "logs": {
+    "1280x720": {
+      "label": "1280x720",
+      "key": "1280x720",
+      "updated_at": 1763214586.9461656,
+      "resolution": {
+        "width": 1280,
+        "height": 720,
+        "label": "1280x720",
+        "fps": 30.0,
+        "source": "csi://0"
+      },
+      "board": {
+        "metadata": {
+          "backend": "jtop",
+          "start_timestamp": 1763214580.9613683,
+          "end_timestamp": 1763214586.9453862,
+          "sample_interval_s": 1.0,
+          "activity_events": [
+            {
+              "timestamp": 1763214580.9613683,
+              "activity": "initializing"
+            },
+            {
+              "timestamp": 1763214580.9623828,
+              "activity": "camera-initialization"
+            },
+            {
+              "timestamp": 1763214581.653297,
+              "activity": "warmup"
+            },
+            {
+              "timestamp": 1763214582.5797184,
+              "activity": "ready"
+            },
+            {
+              "timestamp": 1763214582.5799751,
+              "activity": "guidance"
+            },
+            {
+              "timestamp": 1763214586.944741,
+              "activity": "terminating"
+            },
+            {
+              "timestamp": 1763214586.9453862,
+              "activity": "shutdown"
+            }
+          ],
+          "error": null,
+          "resolution": {
+            "width": 1280,
+            "height": 720,
+            "label": "1280x720",
+            "fps": 30.0,
+            "source": "csi://0"
+          },
+          "requested_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "target_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "frame_max_size": "1280x720",
+          "log_variant": "board",
+          "written_at": 1763214586.9461656
+        },
+        "samples": [
+          {
+            "timestamp": 1763214582.0576708,
+            "activity": "warmup",
+            "elapsed_s": 1.0963025093078613,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.423,
+            "total_avg_power_w": 7.027,
+            "soc_power_w": 3.808,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 114.93775933610652,
+              "ram_mb": 177.837890625,
+              "gpu_mem_mb": 95.6328125,
+              "cpu_share": 0.7638224906508463,
+              "gpu_share": 0.22184164265390818,
+              "estimated_power_w": 2.083090816729486,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.043,
+                "avg_power_w": 1.824,
+                "voltage_v": 5.008,
+                "current_a": 0.408,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.765,
+                "avg_power_w": 1.664,
+                "voltage_v": 5.016,
+                "current_a": 0.352,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214583.0599866,
+            "activity": "guidance",
+            "elapsed_s": 2.098618268966675,
+            "total_name": "VDD_IN",
+            "total_power_w": 8.052,
+            "total_avg_power_w": 7.539,
+            "soc_power_w": 4.2829999999999995,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 140.09720534630148,
+              "ram_mb": 179.345703125,
+              "gpu_mem_mb": 92.03125,
+              "cpu_share": 0.7976326660517921,
+              "gpu_share": 0.21267376782812783,
+              "estimated_power_w": 2.4141091242630437,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.4,
+                "avg_power_w": 2.112,
+                "voltage_v": 5.0,
+                "current_a": 0.48,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.883,
+                "avg_power_w": 1.773,
+                "voltage_v": 5.008,
+                "current_a": 0.376,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214584.056265,
+            "activity": "guidance",
+            "elapsed_s": 3.0948967933654785,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.704,
+            "total_avg_power_w": 7.621,
+            "soc_power_w": 4.002000000000001,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 156.87973997833896,
+              "ram_mb": 179.341796875,
+              "gpu_mem_mb": 95.57421875,
+              "cpu_share": 0.8152580533116018,
+              "gpu_share": 0.21707730390112767,
+              "estimated_power_w": 2.305094985696744,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.16,
+                "avg_power_w": 2.136,
+                "voltage_v": 5.0,
+                "current_a": 0.432,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.842,
+                "avg_power_w": 1.807,
+                "voltage_v": 5.008,
+                "current_a": 0.368,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214585.0599573,
+            "activity": "guidance",
+            "elapsed_s": 4.098588943481445,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.985,
+            "total_avg_power_w": 7.803,
+            "soc_power_w": 4.202999999999999,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 168.23069403715283,
+              "ram_mb": 179.337890625,
+              "gpu_mem_mb": 91.96484375,
+              "cpu_share": 0.825515051113248,
+              "gpu_share": 0.2118795842145525,
+              "estimated_power_w": 2.4379958128788934,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.32,
+                "avg_power_w": 2.228,
+                "voltage_v": 5.0,
+                "current_a": 0.464,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.883,
+                "avg_power_w": 1.845,
+                "voltage_v": 5.008,
+                "current_a": 0.376,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214586.0657642,
+            "activity": "guidance",
+            "elapsed_s": 5.104395866394043,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.744,
+            "total_avg_power_w": 7.773,
+            "soc_power_w": 4.042,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 179.07390917186805,
+              "ram_mb": 179.33203125,
+              "gpu_mem_mb": 91.96484375,
+              "cpu_share": 0.8343232901960606,
+              "gpu_share": 0.2119406209771072,
+              "estimated_power_w": 2.3660664393792725,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.2,
+                "avg_power_w": 2.214,
+                "voltage_v": 5.0,
+                "current_a": 0.44,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.842,
+                "avg_power_w": 1.843,
+                "voltage_v": 5.008,
+                "current_a": 0.368,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          }
+        ]
+      },
+      "process": {
+        "metadata": {
+          "backend": "jtop",
+          "start_timestamp": 1763214580.9613683,
+          "end_timestamp": 1763214586.9453862,
+          "sample_interval_s": 1.0,
+          "activity_events": [
+            {
+              "timestamp": 1763214580.9613683,
+              "activity": "initializing"
+            },
+            {
+              "timestamp": 1763214580.9623828,
+              "activity": "camera-initialization"
+            },
+            {
+              "timestamp": 1763214581.653297,
+              "activity": "warmup"
+            },
+            {
+              "timestamp": 1763214582.5797184,
+              "activity": "ready"
+            },
+            {
+              "timestamp": 1763214582.5799751,
+              "activity": "guidance"
+            },
+            {
+              "timestamp": 1763214586.944741,
+              "activity": "terminating"
+            },
+            {
+              "timestamp": 1763214586.9453862,
+              "activity": "shutdown"
+            }
+          ],
+          "error": null,
+          "resolution": {
+            "width": 1280,
+            "height": 720,
+            "label": "1280x720",
+            "fps": 30.0,
+            "source": "csi://0"
+          },
+          "requested_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "target_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "frame_max_size": "1280x720",
+          "log_variant": "process",
+          "written_at": 1763214586.9461656
+        },
+        "process": {
+          "pid": 50570,
+          "name": "main.py"
+        },
+        "samples": [
+          {
+            "timestamp": 1763214582.0576708,
+            "activity": "warmup",
+            "elapsed_s": 1.0963025093078613,
+            "soc_power_w": 3.808,
+            "process": {
+              "estimated_power_w": 2.083090816729486,
+              "cpu_share": 0.7638224906508463,
+              "gpu_share": 0.22184164265390818,
+              "cpu_percent": 114.93775933610652,
+              "ram_mb": 177.837890625,
+              "gpu_mem_mb": 95.6328125,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214583.0599866,
+            "activity": "guidance",
+            "elapsed_s": 2.098618268966675,
+            "soc_power_w": 4.2829999999999995,
+            "process": {
+              "estimated_power_w": 2.4141091242630437,
+              "cpu_share": 0.7976326660517921,
+              "gpu_share": 0.21267376782812783,
+              "cpu_percent": 140.09720534630148,
+              "ram_mb": 179.345703125,
+              "gpu_mem_mb": 92.03125,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214584.056265,
+            "activity": "guidance",
+            "elapsed_s": 3.0948967933654785,
+            "soc_power_w": 4.002000000000001,
+            "process": {
+              "estimated_power_w": 2.305094985696744,
+              "cpu_share": 0.8152580533116018,
+              "gpu_share": 0.21707730390112767,
+              "cpu_percent": 156.87973997833896,
+              "ram_mb": 179.341796875,
+              "gpu_mem_mb": 95.57421875,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214585.0599573,
+            "activity": "guidance",
+            "elapsed_s": 4.098588943481445,
+            "soc_power_w": 4.202999999999999,
+            "process": {
+              "estimated_power_w": 2.4379958128788934,
+              "cpu_share": 0.825515051113248,
+              "gpu_share": 0.2118795842145525,
+              "cpu_percent": 168.23069403715283,
+              "ram_mb": 179.337890625,
+              "gpu_mem_mb": 91.96484375,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214586.0657642,
+            "activity": "guidance",
+            "elapsed_s": 5.104395866394043,
+            "soc_power_w": 4.042,
+            "process": {
+              "estimated_power_w": 2.3660664393792725,
+              "cpu_share": 0.8343232901960606,
+              "gpu_share": 0.2119406209771072,
+              "cpu_percent": 179.07390917186805,
+              "ram_mb": 179.33203125,
+              "gpu_mem_mb": 91.96484375,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "plots": {
+    "power_1280x720_board": {
+      "type": "power",
+      "title": "1280x720 \u2022 Board power",
+      "payload": {
+        "metadata": {
+          "backend": "jtop",
+          "start_timestamp": 1763214580.9613683,
+          "end_timestamp": 1763214586.9453862,
+          "sample_interval_s": 1.0,
+          "activity_events": [
+            {
+              "timestamp": 1763214580.9613683,
+              "activity": "initializing"
+            },
+            {
+              "timestamp": 1763214580.9623828,
+              "activity": "camera-initialization"
+            },
+            {
+              "timestamp": 1763214581.653297,
+              "activity": "warmup"
+            },
+            {
+              "timestamp": 1763214582.5797184,
+              "activity": "ready"
+            },
+            {
+              "timestamp": 1763214582.5799751,
+              "activity": "guidance"
+            },
+            {
+              "timestamp": 1763214586.944741,
+              "activity": "terminating"
+            },
+            {
+              "timestamp": 1763214586.9453862,
+              "activity": "shutdown"
+            }
+          ],
+          "error": null,
+          "resolution": {
+            "width": 1280,
+            "height": 720,
+            "label": "1280x720",
+            "fps": 30.0,
+            "source": "csi://0"
+          },
+          "requested_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "target_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "frame_max_size": "1280x720",
+          "log_variant": "board",
+          "written_at": 1763214586.9461656
+        },
+        "samples": [
+          {
+            "timestamp": 1763214582.0576708,
+            "activity": "warmup",
+            "elapsed_s": 1.0963025093078613,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.423,
+            "total_avg_power_w": 7.027,
+            "soc_power_w": 3.808,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 114.93775933610652,
+              "ram_mb": 177.837890625,
+              "gpu_mem_mb": 95.6328125,
+              "cpu_share": 0.7638224906508463,
+              "gpu_share": 0.22184164265390818,
+              "estimated_power_w": 2.083090816729486,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.043,
+                "avg_power_w": 1.824,
+                "voltage_v": 5.008,
+                "current_a": 0.408,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.765,
+                "avg_power_w": 1.664,
+                "voltage_v": 5.016,
+                "current_a": 0.352,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214583.0599866,
+            "activity": "guidance",
+            "elapsed_s": 2.098618268966675,
+            "total_name": "VDD_IN",
+            "total_power_w": 8.052,
+            "total_avg_power_w": 7.539,
+            "soc_power_w": 4.2829999999999995,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 140.09720534630148,
+              "ram_mb": 179.345703125,
+              "gpu_mem_mb": 92.03125,
+              "cpu_share": 0.7976326660517921,
+              "gpu_share": 0.21267376782812783,
+              "estimated_power_w": 2.4141091242630437,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.4,
+                "avg_power_w": 2.112,
+                "voltage_v": 5.0,
+                "current_a": 0.48,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.883,
+                "avg_power_w": 1.773,
+                "voltage_v": 5.008,
+                "current_a": 0.376,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214584.056265,
+            "activity": "guidance",
+            "elapsed_s": 3.0948967933654785,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.704,
+            "total_avg_power_w": 7.621,
+            "soc_power_w": 4.002000000000001,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 156.87973997833896,
+              "ram_mb": 179.341796875,
+              "gpu_mem_mb": 95.57421875,
+              "cpu_share": 0.8152580533116018,
+              "gpu_share": 0.21707730390112767,
+              "estimated_power_w": 2.305094985696744,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.16,
+                "avg_power_w": 2.136,
+                "voltage_v": 5.0,
+                "current_a": 0.432,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.842,
+                "avg_power_w": 1.807,
+                "voltage_v": 5.008,
+                "current_a": 0.368,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214585.0599573,
+            "activity": "guidance",
+            "elapsed_s": 4.098588943481445,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.985,
+            "total_avg_power_w": 7.803,
+            "soc_power_w": 4.202999999999999,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 168.23069403715283,
+              "ram_mb": 179.337890625,
+              "gpu_mem_mb": 91.96484375,
+              "cpu_share": 0.825515051113248,
+              "gpu_share": 0.2118795842145525,
+              "estimated_power_w": 2.4379958128788934,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.32,
+                "avg_power_w": 2.228,
+                "voltage_v": 5.0,
+                "current_a": 0.464,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.883,
+                "avg_power_w": 1.845,
+                "voltage_v": 5.008,
+                "current_a": 0.376,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          },
+          {
+            "timestamp": 1763214586.0657642,
+            "activity": "guidance",
+            "elapsed_s": 5.104395866394043,
+            "total_name": "VDD_IN",
+            "total_power_w": 7.744,
+            "total_avg_power_w": 7.773,
+            "soc_power_w": 4.042,
+            "process": {
+              "pid": 50570,
+              "name": "main.py",
+              "user": "sdpt7",
+              "cpu_percent": 179.07390917186805,
+              "ram_mb": 179.33203125,
+              "gpu_mem_mb": 91.96484375,
+              "cpu_share": 0.8343232901960606,
+              "gpu_share": 0.2119406209771072,
+              "estimated_power_w": 2.3660664393792725,
+              "method": "cpu-gpu-weighted"
+            },
+            "rails": [
+              {
+                "rail": "VDD_CPU_GPU_CV",
+                "power_w": 2.2,
+                "avg_power_w": 2.214,
+                "voltage_v": 5.0,
+                "current_a": 0.44,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              },
+              {
+                "rail": "VDD_SOC",
+                "power_w": 1.842,
+                "avg_power_w": 1.843,
+                "voltage_v": 5.008,
+                "current_a": 0.368,
+                "online": true,
+                "sensor_type": null,
+                "status": null
+              }
+            ]
+          }
+        ]
+      },
+      "use_process_power": false
+    },
+    "power_1280x720_process": {
+      "type": "power",
+      "title": "1280x720 \u2022 Process power",
+      "payload": {
+        "metadata": {
+          "backend": "jtop",
+          "start_timestamp": 1763214580.9613683,
+          "end_timestamp": 1763214586.9453862,
+          "sample_interval_s": 1.0,
+          "activity_events": [
+            {
+              "timestamp": 1763214580.9613683,
+              "activity": "initializing"
+            },
+            {
+              "timestamp": 1763214580.9623828,
+              "activity": "camera-initialization"
+            },
+            {
+              "timestamp": 1763214581.653297,
+              "activity": "warmup"
+            },
+            {
+              "timestamp": 1763214582.5797184,
+              "activity": "ready"
+            },
+            {
+              "timestamp": 1763214582.5799751,
+              "activity": "guidance"
+            },
+            {
+              "timestamp": 1763214586.944741,
+              "activity": "terminating"
+            },
+            {
+              "timestamp": 1763214586.9453862,
+              "activity": "shutdown"
+            }
+          ],
+          "error": null,
+          "resolution": {
+            "width": 1280,
+            "height": 720,
+            "label": "1280x720",
+            "fps": 30.0,
+            "source": "csi://0"
+          },
+          "requested_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "target_resolution": {
+            "width": 1280,
+            "height": 720
+          },
+          "frame_max_size": "1280x720",
+          "log_variant": "process",
+          "written_at": 1763214586.9461656
+        },
+        "process": {
+          "pid": 50570,
+          "name": "main.py"
+        },
+        "samples": [
+          {
+            "timestamp": 1763214582.0576708,
+            "activity": "warmup",
+            "elapsed_s": 1.0963025093078613,
+            "soc_power_w": 3.808,
+            "process": {
+              "estimated_power_w": 2.083090816729486,
+              "cpu_share": 0.7638224906508463,
+              "gpu_share": 0.22184164265390818,
+              "cpu_percent": 114.93775933610652,
+              "ram_mb": 177.837890625,
+              "gpu_mem_mb": 95.6328125,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214583.0599866,
+            "activity": "guidance",
+            "elapsed_s": 2.098618268966675,
+            "soc_power_w": 4.2829999999999995,
+            "process": {
+              "estimated_power_w": 2.4141091242630437,
+              "cpu_share": 0.7976326660517921,
+              "gpu_share": 0.21267376782812783,
+              "cpu_percent": 140.09720534630148,
+              "ram_mb": 179.345703125,
+              "gpu_mem_mb": 92.03125,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214584.056265,
+            "activity": "guidance",
+            "elapsed_s": 3.0948967933654785,
+            "soc_power_w": 4.002000000000001,
+            "process": {
+              "estimated_power_w": 2.305094985696744,
+              "cpu_share": 0.8152580533116018,
+              "gpu_share": 0.21707730390112767,
+              "cpu_percent": 156.87973997833896,
+              "ram_mb": 179.341796875,
+              "gpu_mem_mb": 95.57421875,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214585.0599573,
+            "activity": "guidance",
+            "elapsed_s": 4.098588943481445,
+            "soc_power_w": 4.202999999999999,
+            "process": {
+              "estimated_power_w": 2.4379958128788934,
+              "cpu_share": 0.825515051113248,
+              "gpu_share": 0.2118795842145525,
+              "cpu_percent": 168.23069403715283,
+              "ram_mb": 179.337890625,
+              "gpu_mem_mb": 91.96484375,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          },
+          {
+            "timestamp": 1763214586.0657642,
+            "activity": "guidance",
+            "elapsed_s": 5.104395866394043,
+            "soc_power_w": 4.042,
+            "process": {
+              "estimated_power_w": 2.3660664393792725,
+              "cpu_share": 0.8343232901960606,
+              "gpu_share": 0.2119406209771072,
+              "cpu_percent": 179.07390917186805,
+              "ram_mb": 179.33203125,
+              "gpu_mem_mb": 91.96484375,
+              "method": "cpu-gpu-weighted",
+              "pid": 50570,
+              "name": "main.py"
+            }
+          }
+        ]
+      },
+      "use_process_power": true
+    }
+  },
+  "updated_at": 1763214586.9461656,
+  "latest_board": {
+    "metadata": {
+      "backend": "jtop",
+      "start_timestamp": 1763214580.9613683,
+      "end_timestamp": 1763214586.9453862,
+      "sample_interval_s": 1.0,
+      "activity_events": [
+        {
+          "timestamp": 1763214580.9613683,
+          "activity": "initializing"
+        },
+        {
+          "timestamp": 1763214580.9623828,
+          "activity": "camera-initialization"
+        },
+        {
+          "timestamp": 1763214581.653297,
+          "activity": "warmup"
+        },
+        {
+          "timestamp": 1763214582.5797184,
+          "activity": "ready"
+        },
+        {
+          "timestamp": 1763214582.5799751,
+          "activity": "guidance"
+        },
+        {
+          "timestamp": 1763214586.944741,
+          "activity": "terminating"
+        },
+        {
+          "timestamp": 1763214586.9453862,
+          "activity": "shutdown"
+        }
+      ],
+      "error": null,
+      "resolution": {
+        "width": 1280,
+        "height": 720,
+        "label": "1280x720",
+        "fps": 30.0,
+        "source": "csi://0"
+      },
+      "requested_resolution": {
+        "width": 1280,
+        "height": 720
+      },
+      "target_resolution": {
+        "width": 1280,
+        "height": 720
+      },
+      "frame_max_size": "1280x720",
+      "log_variant": "board",
+      "written_at": 1763214586.9461656
+    },
+    "samples": [
+      {
+        "timestamp": 1763214582.0576708,
+        "activity": "warmup",
+        "elapsed_s": 1.0963025093078613,
+        "total_name": "VDD_IN",
+        "total_power_w": 7.423,
+        "total_avg_power_w": 7.027,
+        "soc_power_w": 3.808,
+        "process": {
+          "pid": 50570,
+          "name": "main.py",
+          "user": "sdpt7",
+          "cpu_percent": 114.93775933610652,
+          "ram_mb": 177.837890625,
+          "gpu_mem_mb": 95.6328125,
+          "cpu_share": 0.7638224906508463,
+          "gpu_share": 0.22184164265390818,
+          "estimated_power_w": 2.083090816729486,
+          "method": "cpu-gpu-weighted"
+        },
+        "rails": [
+          {
+            "rail": "VDD_CPU_GPU_CV",
+            "power_w": 2.043,
+            "avg_power_w": 1.824,
+            "voltage_v": 5.008,
+            "current_a": 0.408,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          },
+          {
+            "rail": "VDD_SOC",
+            "power_w": 1.765,
+            "avg_power_w": 1.664,
+            "voltage_v": 5.016,
+            "current_a": 0.352,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          }
+        ]
+      },
+      {
+        "timestamp": 1763214583.0599866,
+        "activity": "guidance",
+        "elapsed_s": 2.098618268966675,
+        "total_name": "VDD_IN",
+        "total_power_w": 8.052,
+        "total_avg_power_w": 7.539,
+        "soc_power_w": 4.2829999999999995,
+        "process": {
+          "pid": 50570,
+          "name": "main.py",
+          "user": "sdpt7",
+          "cpu_percent": 140.09720534630148,
+          "ram_mb": 179.345703125,
+          "gpu_mem_mb": 92.03125,
+          "cpu_share": 0.7976326660517921,
+          "gpu_share": 0.21267376782812783,
+          "estimated_power_w": 2.4141091242630437,
+          "method": "cpu-gpu-weighted"
+        },
+        "rails": [
+          {
+            "rail": "VDD_CPU_GPU_CV",
+            "power_w": 2.4,
+            "avg_power_w": 2.112,
+            "voltage_v": 5.0,
+            "current_a": 0.48,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          },
+          {
+            "rail": "VDD_SOC",
+            "power_w": 1.883,
+            "avg_power_w": 1.773,
+            "voltage_v": 5.008,
+            "current_a": 0.376,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          }
+        ]
+      },
+      {
+        "timestamp": 1763214584.056265,
+        "activity": "guidance",
+        "elapsed_s": 3.0948967933654785,
+        "total_name": "VDD_IN",
+        "total_power_w": 7.704,
+        "total_avg_power_w": 7.621,
+        "soc_power_w": 4.002000000000001,
+        "process": {
+          "pid": 50570,
+          "name": "main.py",
+          "user": "sdpt7",
+          "cpu_percent": 156.87973997833896,
+          "ram_mb": 179.341796875,
+          "gpu_mem_mb": 95.57421875,
+          "cpu_share": 0.8152580533116018,
+          "gpu_share": 0.21707730390112767,
+          "estimated_power_w": 2.305094985696744,
+          "method": "cpu-gpu-weighted"
+        },
+        "rails": [
+          {
+            "rail": "VDD_CPU_GPU_CV",
+            "power_w": 2.16,
+            "avg_power_w": 2.136,
+            "voltage_v": 5.0,
+            "current_a": 0.432,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          },
+          {
+            "rail": "VDD_SOC",
+            "power_w": 1.842,
+            "avg_power_w": 1.807,
+            "voltage_v": 5.008,
+            "current_a": 0.368,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          }
+        ]
+      },
+      {
+        "timestamp": 1763214585.0599573,
+        "activity": "guidance",
+        "elapsed_s": 4.098588943481445,
+        "total_name": "VDD_IN",
+        "total_power_w": 7.985,
+        "total_avg_power_w": 7.803,
+        "soc_power_w": 4.202999999999999,
+        "process": {
+          "pid": 50570,
+          "name": "main.py",
+          "user": "sdpt7",
+          "cpu_percent": 168.23069403715283,
+          "ram_mb": 179.337890625,
+          "gpu_mem_mb": 91.96484375,
+          "cpu_share": 0.825515051113248,
+          "gpu_share": 0.2118795842145525,
+          "estimated_power_w": 2.4379958128788934,
+          "method": "cpu-gpu-weighted"
+        },
+        "rails": [
+          {
+            "rail": "VDD_CPU_GPU_CV",
+            "power_w": 2.32,
+            "avg_power_w": 2.228,
+            "voltage_v": 5.0,
+            "current_a": 0.464,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          },
+          {
+            "rail": "VDD_SOC",
+            "power_w": 1.883,
+            "avg_power_w": 1.845,
+            "voltage_v": 5.008,
+            "current_a": 0.376,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          }
+        ]
+      },
+      {
+        "timestamp": 1763214586.0657642,
+        "activity": "guidance",
+        "elapsed_s": 5.104395866394043,
+        "total_name": "VDD_IN",
+        "total_power_w": 7.744,
+        "total_avg_power_w": 7.773,
+        "soc_power_w": 4.042,
+        "process": {
+          "pid": 50570,
+          "name": "main.py",
+          "user": "sdpt7",
+          "cpu_percent": 179.07390917186805,
+          "ram_mb": 179.33203125,
+          "gpu_mem_mb": 91.96484375,
+          "cpu_share": 0.8343232901960606,
+          "gpu_share": 0.2119406209771072,
+          "estimated_power_w": 2.3660664393792725,
+          "method": "cpu-gpu-weighted"
+        },
+        "rails": [
+          {
+            "rail": "VDD_CPU_GPU_CV",
+            "power_w": 2.2,
+            "avg_power_w": 2.214,
+            "voltage_v": 5.0,
+            "current_a": 0.44,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          },
+          {
+            "rail": "VDD_SOC",
+            "power_w": 1.842,
+            "avg_power_w": 1.843,
+            "voltage_v": 5.008,
+            "current_a": 0.368,
+            "online": true,
+            "sensor_type": null,
+            "status": null
+          }
+        ]
+      }
+    ]
+  },
+  "latest_process": {
+    "metadata": {
+      "backend": "jtop",
+      "start_timestamp": 1763214580.9613683,
+      "end_timestamp": 1763214586.9453862,
+      "sample_interval_s": 1.0,
+      "activity_events": [
+        {
+          "timestamp": 1763214580.9613683,
+          "activity": "initializing"
+        },
+        {
+          "timestamp": 1763214580.9623828,
+          "activity": "camera-initialization"
+        },
+        {
+          "timestamp": 1763214581.653297,
+          "activity": "warmup"
+        },
+        {
+          "timestamp": 1763214582.5797184,
+          "activity": "ready"
+        },
+        {
+          "timestamp": 1763214582.5799751,
+          "activity": "guidance"
+        },
+        {
+          "timestamp": 1763214586.944741,
+          "activity": "terminating"
+        },
+        {
+          "timestamp": 1763214586.9453862,
+          "activity": "shutdown"
+        }
+      ],
+      "error": null,
+      "resolution": {
+        "width": 1280,
+        "height": 720,
+        "label": "1280x720",
+        "fps": 30.0,
+        "source": "csi://0"
+      },
+      "requested_resolution": {
+        "width": 1280,
+        "height": 720
+      },
+      "target_resolution": {
+        "width": 1280,
+        "height": 720
+      },
+      "frame_max_size": "1280x720",
+      "log_variant": "process",
+      "written_at": 1763214586.9461656
+    },
+    "process": {
+      "pid": 50570,
+      "name": "main.py"
+    },
+    "samples": [
+      {
+        "timestamp": 1763214582.0576708,
+        "activity": "warmup",
+        "elapsed_s": 1.0963025093078613,
+        "soc_power_w": 3.808,
+        "process": {
+          "estimated_power_w": 2.083090816729486,
+          "cpu_share": 0.7638224906508463,
+          "gpu_share": 0.22184164265390818,
+          "cpu_percent": 114.93775933610652,
+          "ram_mb": 177.837890625,
+          "gpu_mem_mb": 95.6328125,
+          "method": "cpu-gpu-weighted",
+          "pid": 50570,
+          "name": "main.py"
+        }
+      },
+      {
+        "timestamp": 1763214583.0599866,
+        "activity": "guidance",
+        "elapsed_s": 2.098618268966675,
+        "soc_power_w": 4.2829999999999995,
+        "process": {
+          "estimated_power_w": 2.4141091242630437,
+          "cpu_share": 0.7976326660517921,
+          "gpu_share": 0.21267376782812783,
+          "cpu_percent": 140.09720534630148,
+          "ram_mb": 179.345703125,
+          "gpu_mem_mb": 92.03125,
+          "method": "cpu-gpu-weighted",
+          "pid": 50570,
+          "name": "main.py"
+        }
+      },
+      {
+        "timestamp": 1763214584.056265,
+        "activity": "guidance",
+        "elapsed_s": 3.0948967933654785,
+        "soc_power_w": 4.002000000000001,
+        "process": {
+          "estimated_power_w": 2.305094985696744,
+          "cpu_share": 0.8152580533116018,
+          "gpu_share": 0.21707730390112767,
+          "cpu_percent": 156.87973997833896,
+          "ram_mb": 179.341796875,
+          "gpu_mem_mb": 95.57421875,
+          "method": "cpu-gpu-weighted",
+          "pid": 50570,
+          "name": "main.py"
+        }
+      },
+      {
+        "timestamp": 1763214585.0599573,
+        "activity": "guidance",
+        "elapsed_s": 4.098588943481445,
+        "soc_power_w": 4.202999999999999,
+        "process": {
+          "estimated_power_w": 2.4379958128788934,
+          "cpu_share": 0.825515051113248,
+          "gpu_share": 0.2118795842145525,
+          "cpu_percent": 168.23069403715283,
+          "ram_mb": 179.337890625,
+          "gpu_mem_mb": 91.96484375,
+          "method": "cpu-gpu-weighted",
+          "pid": 50570,
+          "name": "main.py"
+        }
+      },
+      {
+        "timestamp": 1763214586.0657642,
+        "activity": "guidance",
+        "elapsed_s": 5.104395866394043,
+        "soc_power_w": 4.042,
+        "process": {
+          "estimated_power_w": 2.3660664393792725,
+          "cpu_share": 0.8343232901960606,
+          "gpu_share": 0.2119406209771072,
+          "cpu_percent": 179.07390917186805,
+          "ram_mb": 179.33203125,
+          "gpu_mem_mb": 91.96484375,
+          "method": "cpu-gpu-weighted",
+          "pid": 50570,
+          "name": "main.py"
+        }
+      }
+    ]
+  }
+}

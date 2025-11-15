@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -122,6 +122,9 @@ class JetsonPowerLogger:
         self._end_timestamp: Optional[float] = None
         self._metadata_context: Dict[str, Any] = {}
         self._resolution_label: str = "unresolved"
+        self._sample_event = threading.Event()
+        self._activity_sample_counts: Dict[str, int] = {}
+        self._activity_condition = threading.Condition(self._lock)
 
     def __enter__(self) -> "JetsonPowerLogger":
         self.start()
@@ -144,6 +147,7 @@ class JetsonPowerLogger:
         if not self.enabled:
             return
         self._stop_event.set()
+        self._sample_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
@@ -165,6 +169,7 @@ class JetsonPowerLogger:
                 return
             self._activity = activity
         self._record_activity_event(activity, timestamp)
+        self._sample_event.set()
         if self.verbose:
             print(f"[Power] Activity -> {activity}")
 
@@ -240,12 +245,11 @@ class JetsonPowerLogger:
                 while not self._stop_event.is_set() and jetson.ok():
                     sample = self._collect_sample(jetson)
                     if sample is not None:
-                        with self._lock:
-                            self._samples.append(sample)
+                        self._register_sample(sample)
                         if self.verbose and sample.total_power_w is not None:
                             print(f"[Power] {sample.total_power_w:.2f} W ({sample.activity})")
-                    # jtop already waits for the interval internally, but sleep lightly to honour stop events.
-                    self._stop_event.wait(self.sample_interval)
+                    if self._await_next_sample():
+                        break
         except Exception as exc:  # pragma: no cover - device interaction
             self._last_error = str(exc)
 
@@ -264,6 +268,68 @@ class JetsonPowerLogger:
         snapshot.soc_power_w = self._estimate_soc_power(snapshot.rails)
         snapshot.process = self._build_process_breakdown(jetson, snapshot.soc_power_w)
         return snapshot
+
+    def _register_sample(self, sample: PowerSample) -> None:
+        with self._lock:
+            self._samples.append(sample)
+            count = self._activity_sample_counts.get(sample.activity, 0) + 1
+            self._activity_sample_counts[sample.activity] = count
+            self._activity_condition.notify_all()
+
+    def activity_sample_count(self, activity: str) -> int:
+        if not self.enabled:
+            return 0
+        with self._lock:
+            return self._activity_sample_counts.get(activity, 0)
+
+    def wait_for_activity_sample(self, activity: str, baseline: Optional[int], *, timeout: float = 1.5) -> bool:
+        if not self.enabled or baseline is None:
+            return True
+        deadline = time.time() + max(timeout, 0.0)
+        with self._activity_condition:
+            while self._activity_sample_counts.get(activity, 0) <= baseline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                self._activity_condition.wait(timeout=remaining)
+        return True
+
+    def force_activity_sample(self, activity: str) -> bool:
+        if not self.enabled:
+            return False
+        with self._lock:
+            if not self._samples:
+                return False
+            source = self._samples[-1]
+            elapsed = max(0.0, time.time() - (self._start_timestamp or time.time()))
+            clone = replace(
+                source,
+                timestamp=time.time(),
+                activity=activity,
+                elapsed_s=elapsed,
+            )
+            self._samples.append(clone)
+            count = self._activity_sample_counts.get(activity, 0) + 1
+            self._activity_sample_counts[activity] = count
+            self._activity_condition.notify_all()
+            return True
+
+    def _await_next_sample(self) -> bool:
+        """Wait for the next sampling window or an activity-triggered request.
+
+        Returns True when the logger should exit (stop requested), False to continue sampling.
+        """
+        deadline = time.time() + self.sample_interval
+        while True:
+            if self._stop_event.is_set():
+                return True
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            if self._sample_event.wait(timeout=remaining):
+                self._sample_event.clear()
+                break
+        return self._stop_event.is_set()
 
     def _estimate_soc_power(self, rails: List[ChannelReading]) -> Optional[float]:
         if not rails:

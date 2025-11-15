@@ -14,6 +14,8 @@ from MobileFaceNet import MobileFaceNetService
 from .guidance import GuidanceBox, run_guidance_phase
 from .verification import FaceObservation, run_verification_phase
 
+_WINDOW_READY: set[str] = set()
+
 
 @dataclass
 class SessionCycle:
@@ -117,6 +119,8 @@ class SessionRunner:
         if self._wait_for_next_callback is not None:
             return bool(self._wait_for_next_callback())
         while True:
+            if self._window_closed():
+                return False
             key = cv2.waitKey(0) & 0xFF
             if key == ord(" "):
                 return True
@@ -152,8 +156,20 @@ class SessionRunner:
         """Return True when the operator cancels guidance from the OpenCV window."""
         if self._poll_cancel_callback is not None:
             return bool(self._poll_cancel_callback())
+        if self._window_closed():
+            return True
         key = cv2.waitKey(1) & 0xFF
         return key in (27, ord("q"))
+
+    def _window_closed(self) -> bool:
+        try:
+            visible = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
+        except cv2.error:
+            return self.window_name in _WINDOW_READY
+        if visible < 0:
+            return False
+        _WINDOW_READY.add(self.window_name)
+        return visible < 1
 
 
 def adjust_window_to_capture(

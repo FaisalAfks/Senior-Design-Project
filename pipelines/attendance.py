@@ -41,6 +41,18 @@ BLAZEFACE_MIN_FACE = 64
 MOBILEFACENET_INPUT = 112
 DEEPIX_TARGET_SIZE = 224
 GUIDANCE_MIN_SIDE = max(BLAZEFACE_MIN_FACE, MOBILEFACENET_INPUT, DEEPIX_TARGET_SIZE)
+_WINDOW_READY: set[str] = set()
+
+
+def _window_closed(window_name: str) -> bool:
+    try:
+        visible = cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE)
+    except cv2.error:
+        return window_name in _WINDOW_READY
+    if visible < 0:
+        return False
+    _WINDOW_READY.add(window_name)
+    return visible < 1
 
 
 @dataclass
@@ -89,6 +101,7 @@ class AttendancePipeline:
             getattr(args, "spoof_thr", 0.5),
         )
         self.power_logger = self._create_power_logger()
+        self._verification_sample_baseline: Optional[int] = None
 
     # ------------------------------------------------------------------ public helpers
     def build_session_runner(
@@ -421,6 +434,10 @@ class AttendancePipeline:
                 self.power_logger.set_activity("terminating")
                 self._notify_stage("terminating", callbacks)
                 break
+            if _window_closed(window_name):
+                self.power_logger.set_activity("terminating")
+                self._notify_stage("terminating", callbacks)
+                break
             if not callbacks or callbacks.on_verification_frame is None:
                 key = cv2.waitKey(1) & 0xFF
                 if key in (27, ord("q")):
@@ -450,11 +467,13 @@ class AttendancePipeline:
                 on_activity_change=activity_callback,
             )
             if cycle is None:
+                self._verification_sample_baseline = None
                 self.power_logger.set_activity("terminating")
                 if callbacks and callbacks.on_stage_change:
                     callbacks.on_stage_change("terminating")
                 break
 
+            self._await_verification_sample()
             self.power_logger.set_activity("processing")
             self._notify_stage("processing", callbacks)
             summary = aggregate_observations(cycle.observations, spoof_threshold=self.args.spoof_thr)
@@ -535,10 +554,22 @@ class AttendancePipeline:
 
     def _build_activity_handler(self, callbacks: SessionCallbacks | None) -> Callable[[str], None]:
         def handler(activity: str) -> None:
+            if activity == "verification":
+                self._verification_sample_baseline = self.power_logger.activity_sample_count("verification")
             self.power_logger.set_activity(activity)
             self._notify_stage(activity, callbacks)
 
         return handler
+
+    def _await_verification_sample(self) -> None:
+        baseline = self._verification_sample_baseline
+        self._verification_sample_baseline = None
+        if baseline is None:
+            return
+        timeout = max(1.5, getattr(self.power_logger, "sample_interval", 1.0) * 2.0)
+        if not self.power_logger.wait_for_activity_sample("verification", baseline, timeout=timeout):
+            if not self.power_logger.force_activity_sample("verification"):
+                print("[Power] Warning: verification activity completed without a dedicated power sample.")
 
     @staticmethod
     def _notify_stage(stage: str, callbacks: SessionCallbacks | None) -> None:

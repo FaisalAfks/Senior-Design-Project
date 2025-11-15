@@ -258,6 +258,9 @@ class DemoConfig:
     guidance_center_tolerance: float = 0.2
     guidance_size_tolerance: float = 0.2
     guidance_crop_padding: float = 0.2
+    evaluation_duration: float = float(getattr(CLI_DEFAULTS, "evaluation_duration", 1.0))
+    evaluation_mode: str = str(getattr(CLI_DEFAULTS, "evaluation_mode", "time"))
+    evaluation_frames: int = int(getattr(CLI_DEFAULTS, "evaluation_frames", 30))
 
     def to_pipeline_args(self) -> SimpleNamespace:
         width = self.width or 0
@@ -280,9 +283,9 @@ class DemoConfig:
             spoof_weights=str(self.spoof_weights_path),
             disable_spoof=not self.enable_spoof,
             spoof_thr=self.spoof_threshold,
-            evaluation_duration=float(getattr(defaults, "evaluation_duration", 1.0)),
-            evaluation_mode=str(getattr(defaults, "evaluation_mode", "time")),
-            evaluation_frames=int(getattr(defaults, "evaluation_frames", 30)),
+            evaluation_duration=float(self.evaluation_duration),
+            evaluation_mode=str(self.evaluation_mode),
+            evaluation_frames=int(self.evaluation_frames),
             attendance_log=str(self.attendance_log),
             guidance_box_size=int(self.guidance_box_size),
             guidance_center_tolerance=float(self.guidance_center_tolerance),
@@ -604,9 +607,19 @@ class AttendanceLog(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master)
         columns = ("timestamp", "identity", "result", "source")
+        self._columns = columns
+        self._heading_labels = {
+            "timestamp": "Timestamp",
+            "identity": "Identity",
+            "result": "Result",
+            "source": "Source",
+        }
+        self._sort_column: Optional[str] = None
+        self._sort_descending = False
+
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=10)
-        for col, heading in zip(columns, ("Timestamp", "Identity", "Result", "Source")):
-            self.tree.heading(col, text=heading)
+        for col in columns:
+            self.tree.heading(col, text=self._heading_labels[col], command=lambda c=col: self._sort_tree(c))
             self.tree.column(col, anchor="w")
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -615,11 +628,15 @@ class AttendanceLog(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-    def add_entry(self, *, timestamp: str, identity: str, accepted: bool, source: str) -> None:
+    def add_entry(self, *, timestamp: str, identity: str, accepted: bool, source: str, reapply_sort: bool = True) -> None:
         result = "Accepted" if accepted else "Rejected"
         display_time = _format_display_timestamp(timestamp)
         self.tree.insert("", 0, values=(display_time, identity, result, source))
-        # Limit rows
+        self._trim_rows()
+        if reapply_sort:
+            self._reapply_sort_if_needed()
+
+    def _trim_rows(self) -> None:
         children = self.tree.get_children()
         for item in children[200:]:
             self.tree.delete(item)
@@ -637,7 +654,66 @@ class AttendanceLog(ttk.Frame):
                 identity=str(entry.get("identity", "")),
                 accepted=bool(entry.get("accepted")),
                 source=str(entry.get("source", "")),
+                reapply_sort=False,
             )
+        self._reapply_sort_if_needed()
+
+    def _reapply_sort_if_needed(self) -> None:
+        if self._sort_column:
+            self._sort_tree(self._sort_column, toggle=False, descending=self._sort_descending)
+
+    def _sort_tree(self, column: str, *, toggle: bool = True, descending: Optional[bool] = None) -> None:
+        items = self.tree.get_children("")
+        if not items:
+            return
+        if descending is None:
+            if toggle and self._sort_column == column:
+                descending = not self._sort_descending
+            elif toggle:
+                descending = False
+            else:
+                descending = self._sort_descending if self._sort_column == column else False
+        sort_payload: list[tuple[tuple[int, object], str]] = []
+        for item in items:
+            value = self.tree.set(item, column)
+            sort_payload.append((self._sort_key(column, value), item))
+        sort_payload.sort(key=lambda entry: entry[0], reverse=bool(descending))
+        for index, (_, item) in enumerate(sort_payload):
+            self.tree.move(item, "", index)
+        self._sort_column = column
+        self._sort_descending = bool(descending)
+        self._update_heading_labels()
+
+    def _sort_key(self, column: str, raw_value: str) -> tuple[int, object]:
+        text = (raw_value or "").strip()
+        if column == "timestamp":
+            parsed = self._parse_display_timestamp(text)
+            if parsed is not None:
+                return (0, parsed)
+            return (1, text.lower())
+        if column == "result":
+            order = 0 if text.lower().startswith("accept") else 1
+            return (order, text.lower())
+        return (0, text.lower())
+
+    @staticmethod
+    def _parse_display_timestamp(value: str) -> Optional[datetime]:
+        if not value:
+            return None
+        for fmt in ("%b %d, %Y %I:%M %p", "%b %d, %Y %I:%M%p"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _update_heading_labels(self) -> None:
+        for col in self._columns:
+            label = self._heading_labels[col]
+            if col == self._sort_column:
+                arrow = "▼" if self._sort_descending else "▲"
+                label = f"{label} {arrow}"
+            self.tree.heading(col, text=label)
 
 
 class ControlPanel(ttk.Frame):
@@ -666,6 +742,9 @@ class ControlPanel(ttk.Frame):
         self.guidance_center_tol_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "guidance_center_tolerance", 0.3)))
         self.guidance_size_tol_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "guidance_size_tolerance", 0.3)))
         self.guidance_padding_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "guidance_crop_padding", 0.5)))
+        self.eval_mode_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "evaluation_mode", "time")))
+        self.eval_duration_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "evaluation_duration", 1.0)))
+        self.eval_frames_var = tk.StringVar(value=str(getattr(CLI_DEFAULTS, "evaluation_frames", 30)))
         self._load_settings()
         self._build()
 
@@ -691,7 +770,7 @@ class ControlPanel(ttk.Frame):
         ttk.Combobox(
             capture_frame,
             textvariable=self.device_var,
-            values=("cpu", "cuda", "cuda:0"),
+            values=("cpu", "cuda"),
             state="readonly",
         ).grid(row=3, column=0, sticky="ew", pady=(0, 6))
         ttk.Label(capture_frame, text="Resolution preset").grid(row=4, column=0, sticky="w")
@@ -742,8 +821,23 @@ class ControlPanel(ttk.Frame):
         ttk.Label(guidance_frame, text="Crop padding (0-1)").grid(row=6, column=0, sticky="w")
         ttk.Entry(guidance_frame, textvariable=self.guidance_padding_var).grid(row=7, column=0, sticky="ew")
 
+        verification_frame = ttk.LabelFrame(left, text="Verification Capture")
+        verification_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        verification_frame.columnconfigure(0, weight=1)
+        ttk.Label(verification_frame, text="Mode").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            verification_frame,
+            textvariable=self.eval_mode_var,
+            values=("time", "frames"),
+            state="readonly",
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(verification_frame, text="Duration (s)").grid(row=2, column=0, sticky="w")
+        ttk.Entry(verification_frame, textvariable=self.eval_duration_var).grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(verification_frame, text="Frame limit").grid(row=4, column=0, sticky="w")
+        ttk.Entry(verification_frame, textvariable=self.eval_frames_var).grid(row=5, column=0, sticky="ew")
+
         power_frame = ttk.LabelFrame(left, text="Jetson Power Logging")
-        power_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        power_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         power_frame.columnconfigure(0, weight=1)
         power_toggle = ttk.Checkbutton(power_frame, text="Enable power logging", variable=self.power_enabled_var)
         power_toggle.grid(row=0, column=0, sticky="w")
@@ -776,7 +870,10 @@ class ControlPanel(ttk.Frame):
         except (OSError, json.JSONDecodeError):
             return
         self.source_var.set(str(data.get("source", self.source_var.get())))
-        self.device_var.set(str(data.get("device", self.device_var.get())))
+        device_value = str(data.get("device", self.device_var.get()))
+        if device_value == "cuda:0":
+            device_value = "cuda"
+        self.device_var.set(device_value)
         preset = data.get("resolution_preset")
         resolution_labels = [label for label, _ in RESOLUTION_PRESETS]
         if preset in resolution_labels:
@@ -805,6 +902,11 @@ class ControlPanel(ttk.Frame):
         self.enable_spoof_var.set(bool(data.get("enable_spoof", True)))
         self.display_scores_var.set(bool(data.get("display_scores", True)))
         self.show_metrics_var.set(bool(data.get("show_metrics", True)))
+        eval_mode = str(data.get("evaluation_mode", self.eval_mode_var.get())).strip().lower()
+        if eval_mode in ("time", "frames"):
+            self.eval_mode_var.set(eval_mode)
+        self.eval_duration_var.set(str(data.get("evaluation_duration", self.eval_duration_var.get())))
+        self.eval_frames_var.set(str(data.get("evaluation_frames", self.eval_frames_var.get())))
         self.power_enabled_var.set(bool(data.get("power_enabled", False)) and POWER_AVAILABLE)
         self.power_path_var.set(str(data.get("power_path", self.power_path_var.get())))
         self.power_interval_var.set(str(data.get("power_interval", self.power_interval_var.get())))
@@ -824,6 +926,9 @@ class ControlPanel(ttk.Frame):
             "enable_spoof": bool(self.enable_spoof_var.get()),
             "display_scores": bool(self.display_scores_var.get()),
             "show_metrics": bool(self.show_metrics_var.get()),
+            "evaluation_mode": self.eval_mode_var.get(),
+            "evaluation_duration": self.eval_duration_var.get(),
+            "evaluation_frames": self.eval_frames_var.get(),
             "power_enabled": bool(self.power_enabled_var.get()),
             "power_path": self.power_path_var.get(),
             "power_interval": self.power_interval_var.get(),
@@ -847,6 +952,8 @@ class ControlPanel(ttk.Frame):
             center_tol = float(self.guidance_center_tol_var.get() or "0.3")
             size_tol = float(self.guidance_size_tol_var.get() or "0.3")
             crop_padding = float(self.guidance_padding_var.get() or "0.5")
+            eval_duration = float(self.eval_duration_var.get() or "0.9")
+            eval_frames = int(float(self.eval_frames_var.get() or "30"))
         except ValueError as exc:
             messagebox.showerror("Invalid settings", f"Numeric format error: {exc}", parent=self)
             return None
@@ -854,6 +961,11 @@ class ControlPanel(ttk.Frame):
         center_tol = max(0.0, center_tol)
         size_tol = max(0.0, size_tol)
         crop_padding = max(0.0, crop_padding)
+        eval_duration = max(0.1, eval_duration)
+        eval_frames = max(1, eval_frames)
+        eval_mode = self.eval_mode_var.get().strip().lower()
+        if eval_mode not in ("time", "frames"):
+            eval_mode = "time"
         width, height = self._current_resolution()
         fps_value = self._current_fps()
         return DemoConfig(
@@ -875,6 +987,9 @@ class ControlPanel(ttk.Frame):
             guidance_center_tolerance=center_tol,
             guidance_size_tolerance=size_tol,
             guidance_crop_padding=crop_padding,
+            evaluation_duration=eval_duration,
+            evaluation_mode=eval_mode,
+            evaluation_frames=eval_frames,
         )
 
     def _current_resolution(self) -> tuple[Optional[int], Optional[int]]:
