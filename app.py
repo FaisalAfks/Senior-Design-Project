@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import shutil
-import subprocess
 import threading
 import traceback
 from dataclasses import dataclass
