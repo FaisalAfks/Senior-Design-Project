@@ -121,6 +121,7 @@ class JetsonPowerLogger:
         self._start_timestamp: Optional[float] = None
         self._end_timestamp: Optional[float] = None
         self._metadata_context: Dict[str, Any] = {}
+        self._resolution_label: str = "unresolved"
 
     def __enter__(self) -> "JetsonPowerLogger":
         self.start()
@@ -218,6 +219,7 @@ class JetsonPowerLogger:
         if source is not None:
             resolution["source"] = str(source)
         self.update_metadata(resolution=resolution)
+        self._resolution_label = self._sanitize_resolution_label(resolution["label"])
 
     # Internal helpers -----------------------------------------------------------------
 
@@ -440,6 +442,92 @@ class JetsonPowerLogger:
             payload["metadata"].update(metadata_context)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        self._write_resolution_variants(payload)
+
+    def _write_resolution_variants(self, payload: Dict[str, Any]) -> None:
+        """Persist per-resolution variants with whole-device and pid-specific views."""
+        if not self.log_path:
+            return
+        resolution_meta = (payload.get("metadata") or {}).get("resolution") or {}
+        label = resolution_meta.get("label") or self._resolution_label or "unresolved"
+        safe_label = self._sanitize_resolution_label(str(label))
+        resolution_dir = self._resolution_root_dir() / safe_label
+        resolution_dir.mkdir(parents=True, exist_ok=True)
+
+        whole_device_filename = f"{self.log_path.stem}_whole_device.json"
+        whole_device_path = resolution_dir / whole_device_filename
+        whole_device_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        pid_payload = self._build_pid_payload(payload)
+        pid_filename = self._pid_filename()
+        pid_path = resolution_dir / pid_filename
+        pid_path.write_text(json.dumps(pid_payload, indent=2), encoding="utf-8")
+
+        manifest_path = resolution_dir / "manifest.json"
+        manifest = {
+            "resolution_label": label,
+            "written_at": time.time(),
+            "source_log": str(self.log_path),
+            "whole_device_log": whole_device_filename,
+            "pid_specific_log": pid_filename,
+            "samples": len(payload.get("samples") or []),
+            "pid_samples": len(pid_payload.get("samples") or []),
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    def _build_pid_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = dict(payload.get("metadata") or {})
+        metadata["log_variant"] = "pid-specific"
+        samples = []
+        for sample in payload.get("samples") or []:
+            process = sample.get("process")
+            if not process:
+                continue
+            entry = {
+                "timestamp": sample.get("timestamp"),
+                "activity": sample.get("activity"),
+                "elapsed_s": sample.get("elapsed_s"),
+                "estimated_power_w": process.get("estimated_power_w"),
+                "cpu_share": process.get("cpu_share"),
+                "gpu_share": process.get("gpu_share"),
+                "cpu_percent": process.get("cpu_percent"),
+                "ram_mb": process.get("ram_mb"),
+                "gpu_mem_mb": process.get("gpu_mem_mb"),
+                "method": process.get("method"),
+                "soc_power_w": sample.get("soc_power_w"),
+            }
+            samples.append(entry)
+        return {
+            "metadata": metadata,
+            "process": {
+                "pid": self.process_pid,
+                "name": self.process_name,
+            },
+            "samples": samples,
+        }
+
+    def _pid_filename(self) -> str:
+        base = self.log_path.stem or "power_log"
+        pid_label = f"pid{self.process_pid}" if self.process_pid is not None else "pid"
+        return f"{base}_{pid_label}.json"
+
+    def _resolution_root_dir(self) -> Path:
+        base = self.log_path
+        if base.suffix:
+            try:
+                return base.with_suffix("")
+            except ValueError:
+                pass
+        return base
+
+    @staticmethod
+    def _sanitize_resolution_label(label: str) -> str:
+        text = (label or "").strip()
+        if not text:
+            return "unresolved"
+        cleaned = "".join(ch if ch.isalnum() or ch in ("_", "-", "x", "X") else "_" for ch in text)
+        cleaned = cleaned.strip("_")
+        return cleaned.lower() or "unresolved"
 
 
 def jetson_power_available() -> bool:
