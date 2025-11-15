@@ -135,7 +135,7 @@ PHASE_COLORS = {
     "other": "#bcbd22",  # olive
 }
 
-MIN_SEGMENT_DURATION = 1.0  # seconds
+MIN_SEGMENT_DURATION = 0.2  # seconds
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,6 +220,67 @@ def load_metrics(path: Path) -> Dict[str, Any]:
         raise FileNotFoundError(
             "Metrics file not found; checked: " + ", ".join(search_paths)
         ) from exc
+
+
+def _infer_power_plot_reference(name: str) -> Tuple[Optional[str], Optional[str]]:
+    if not isinstance(name, str):
+        return None, None
+    if not name.startswith("power_"):
+        return None, None
+    remainder = name[len("power_") :]
+    if "_" not in remainder:
+        return None, None
+    prefix, suffix = remainder.rsplit("_", 1)
+    variant = suffix if suffix in ("board", "process") else None
+    key = prefix or None
+    return key, variant
+
+
+def _resolve_power_plot_payload(root_payload: Dict[str, Any], config: Dict[str, Any], plot_name: str) -> Optional[Dict[str, Any]]:
+    payload_value = config.get("payload")
+    if isinstance(payload_value, dict):
+        return payload_value
+
+    logs_section = root_payload.get("logs")
+    if not isinstance(logs_section, dict):
+        logs_section = {}
+
+    log_key = config.get("log_key")
+    variant_hint = config.get("variant") or config.get("log_variant")
+    parsed_key, parsed_variant = _infer_power_plot_reference(plot_name)
+    if not log_key and parsed_key:
+        log_key = parsed_key
+    if not variant_hint and parsed_variant:
+        variant_hint = parsed_variant
+
+    if isinstance(log_key, str):
+        target_variant = None
+        if isinstance(variant_hint, str):
+            lowered = variant_hint.strip().lower()
+            if lowered.startswith("process"):
+                target_variant = "process"
+            elif lowered.startswith("board"):
+                target_variant = "board"
+        entry = logs_section.get(log_key)
+        if isinstance(entry, dict):
+            variants = entry.get("variants")
+            selected = None
+            if isinstance(variants, dict):
+                if target_variant:
+                    selected = variants.get(target_variant)
+                else:
+                    selected = variants.get("board")
+                if selected is None and not target_variant:
+                    # Fall back to the first available variant.
+                    selected = next((payload for payload in variants.values() if isinstance(payload, dict)), None)
+            if selected is None and target_variant:
+                # Compatibility with pre-normalised entries.
+                selected = entry.get(target_variant)
+            if selected is None and not target_variant:
+                selected = entry.get("board") or entry.get("process")
+            if isinstance(selected, dict):
+                return selected
+    return None
 
 
 def handle_composite_plots(args: argparse.Namespace, payload: Dict[str, Any]) -> bool:
@@ -339,11 +400,8 @@ def handle_composite_plots(args: argparse.Namespace, payload: Dict[str, Any]) ->
             if fig is not None:
                 plot_figures.append(fig)
         elif plot_type == "power":
-            payload_value = config.get("payload")
-            if isinstance(payload_value, dict):
-                log_payload = payload_value
-            else:
-                log_payload = None
+            log_payload = _resolve_power_plot_payload(payload, config, name)
+            if log_payload is None:
                 log_spec = None
                 for key in ("log", "log_path", "path", "file", "metrics"):
                     spec_candidate = config.get(key)
@@ -351,7 +409,7 @@ def handle_composite_plots(args: argparse.Namespace, payload: Dict[str, Any]) ->
                         log_spec = spec_candidate
                         break
                 if log_spec is None:
-                    print(f"Skipping plot '{name}' (no power log specified).")
+                    print(f"Skipping plot '{name}' (power log payload not found).")
                     continue
                 if isinstance(log_spec, (list, tuple)):
                     print(f"Skipping plot '{name}' (list of power logs not supported).")

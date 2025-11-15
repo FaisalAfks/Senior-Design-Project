@@ -6,7 +6,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -71,6 +71,11 @@ class PowerSample:
     soc_power_w: Optional[float] = None
     process: Optional[ProcessPowerBreakdown] = None
     rails: List[ChannelReading] = field(default_factory=list)
+
+
+def _compact_mapping(values: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a shallow copy of values without None entries."""
+    return {key: value for key, value in values.items() if value is not None}
 
 
 class JetsonPowerLogger:
@@ -493,64 +498,128 @@ class JetsonPowerLogger:
         with self._lock:
             activity_events = list(self._activity_events)
             metadata_context = dict(self._metadata_context)
-        payload = {
-            "metadata": {
-                "backend": "jtop",
-                "start_timestamp": self._start_timestamp,
-                "end_timestamp": self._end_timestamp,
-                "sample_interval_s": self.sample_interval,
-                "activity_events": activity_events,
-                "error": self._last_error,
-            },
-            "samples": [asdict(sample) for sample in self._samples],
+        samples = self._serialize_samples()
+        metadata = {
+            "backend": "jtop",
+            "start_timestamp": self._start_timestamp,
+            "end_timestamp": self._end_timestamp,
+            "sample_interval_s": self.sample_interval,
+            "activity_events": activity_events,
+            "error": self._last_error,
         }
         if metadata_context:
-            payload["metadata"].update(metadata_context)
+            metadata.update(metadata_context)
+        metadata = _compact_mapping(metadata)
         written_ts = time.time()
-        payload["metadata"]["log_variant"] = "board"
-        payload["metadata"]["written_at"] = written_ts
-        pid_payload = self._build_pid_payload(payload)
-        pid_payload["metadata"]["written_at"] = written_ts
+        metadata["log_variant"] = "board"
+        metadata["written_at"] = written_ts
+        payload = {
+            "metadata": metadata,
+            "samples": samples,
+        }
+        pid_metadata = dict(metadata)
+        pid_metadata["log_variant"] = "process"
+        pid_payload = self._build_pid_payload(pid_metadata, samples)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         combined_payload = self._load_combined_log()
         merged_payload = self._merge_combined_log(combined_payload, payload, pid_payload)
         self.log_path.write_text(json.dumps(merged_payload, indent=2), encoding="utf-8")
 
-    def _build_pid_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        metadata = dict(payload.get("metadata") or {})
+    def _build_pid_payload(self, metadata: Dict[str, Any], samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        metadata = dict(metadata)
         metadata["log_variant"] = "process"
-        samples = []
-        for sample in payload.get("samples") or []:
+        metadata = _compact_mapping(metadata)
+        process_samples: List[Dict[str, Any]] = []
+        for sample in samples:
             process = sample.get("process")
             if not isinstance(process, dict):
                 continue
-            process_entry = {
-                "estimated_power_w": process.get("estimated_power_w"),
-                "cpu_share": process.get("cpu_share"),
-                "gpu_share": process.get("gpu_share"),
-                "cpu_percent": process.get("cpu_percent"),
-                "ram_mb": process.get("ram_mb"),
-                "gpu_mem_mb": process.get("gpu_mem_mb"),
-                "method": process.get("method"),
-                "pid": process.get("pid"),
-                "name": process.get("name"),
-            }
             entry = {
                 "timestamp": sample.get("timestamp"),
                 "activity": sample.get("activity"),
                 "elapsed_s": sample.get("elapsed_s"),
+                "total_name": sample.get("total_name"),
+                "total_power_w": sample.get("total_power_w"),
+                "total_avg_power_w": sample.get("total_avg_power_w"),
                 "soc_power_w": sample.get("soc_power_w"),
-                "process": process_entry,
+                "process": process,
             }
-            samples.append(entry)
+            process_samples.append(_compact_mapping(entry))
         return {
             "metadata": metadata,
             "process": {
                 "pid": self.process_pid,
                 "name": self.process_name,
             },
-            "samples": samples,
+            "samples": process_samples,
         }
+
+    def _serialize_samples(self) -> List[Dict[str, Any]]:
+        serialized: List[Dict[str, Any]] = []
+        for sample in self._samples:
+            entry: Dict[str, Any] = {
+                "timestamp": sample.timestamp,
+                "elapsed_s": sample.elapsed_s,
+            }
+            activity = (sample.activity or "").strip()
+            if activity:
+                entry["activity"] = activity
+            if sample.total_name:
+                entry["total_name"] = sample.total_name
+            if sample.total_power_w is not None:
+                entry["total_power_w"] = sample.total_power_w
+            if sample.total_avg_power_w is not None:
+                entry["total_avg_power_w"] = sample.total_avg_power_w
+            if sample.soc_power_w is not None:
+                entry["soc_power_w"] = sample.soc_power_w
+            process_entry = self._serialize_process_breakdown(sample.process)
+            if process_entry:
+                entry["process"] = process_entry
+            rails = [self._serialize_rail(reading) for reading in sample.rails]
+            rails = [rail for rail in rails if rail]
+            if rails:
+                entry["rails"] = rails
+            serialized.append(entry)
+        return serialized
+
+    @staticmethod
+    def _serialize_process_breakdown(breakdown: Optional[ProcessPowerBreakdown]) -> Optional[Dict[str, Any]]:
+        if breakdown is None:
+            return None
+        entry = {
+            "pid": breakdown.pid,
+            "name": breakdown.name,
+            "user": breakdown.user,
+            "cpu_percent": breakdown.cpu_percent,
+            "ram_mb": breakdown.ram_mb,
+            "gpu_mem_mb": breakdown.gpu_mem_mb,
+            "cpu_share": breakdown.cpu_share,
+            "gpu_share": breakdown.gpu_share,
+            "estimated_power_w": breakdown.estimated_power_w,
+        }
+        compact = _compact_mapping(entry)
+        if breakdown.method:
+            compact["method"] = breakdown.method
+        return compact or None
+
+    @staticmethod
+    def _serialize_rail(reading: ChannelReading) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {}
+        if reading.rail is not None:
+            entry["rail"] = reading.rail
+        extras = _compact_mapping(
+            {
+                "power_w": reading.power_w,
+                "avg_power_w": reading.avg_power_w,
+                "voltage_v": reading.voltage_v,
+                "current_a": reading.current_a,
+                "online": reading.online,
+                "sensor_type": reading.sensor_type,
+                "status": reading.status,
+            }
+        )
+        entry.update(extras)
+        return entry
 
     @staticmethod
     def _sanitize_resolution_label(label: str) -> str:
@@ -563,7 +632,7 @@ class JetsonPowerLogger:
 
     def _empty_combined_log(self) -> Dict[str, Any]:
         return {
-            "version": 2,
+            "version": 3,
             "logs": {},
             "plots": {},
         }
@@ -581,7 +650,70 @@ class JetsonPowerLogger:
             raw["logs"] = {}
         if "plots" not in raw or not isinstance(raw["plots"], dict):
             raw["plots"] = {}
-        return raw
+        return self._normalize_combined_log(raw)
+
+    def _normalize_combined_log(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        logs = payload.get("logs")
+        if not isinstance(logs, dict):
+            payload["logs"] = {}
+            logs = payload["logs"]
+        for key, entry in list(logs.items()):
+            if not isinstance(entry, dict):
+                continue
+            variants = entry.get("variants")
+            if not isinstance(variants, dict):
+                variants = {}
+            board_payload = entry.pop("board", None)
+            process_payload = entry.pop("process", None)
+            if board_payload and "board" not in variants:
+                variants["board"] = board_payload
+            if process_payload and process_payload.get("samples"):
+                variants["process"] = process_payload
+            entry["variants"] = variants
+        plots = payload.get("plots")
+        if not isinstance(plots, dict):
+            payload["plots"] = {}
+            plots = payload["plots"]
+        for name, config in plots.items():
+            if not isinstance(config, dict):
+                continue
+            if config.get("type") != "power":
+                continue
+            parsed_key, parsed_variant = self._parse_plot_reference(name)
+            if "log_key" not in config and parsed_key:
+                config["log_key"] = parsed_key
+            if "variant" not in config and parsed_variant:
+                config["variant"] = parsed_variant
+            if "payload" in config and config.get("log_key"):
+                config.pop("payload", None)
+        payload["version"] = 3
+        if "latest_board" in payload and isinstance(payload["latest_board"], dict):
+            latest = payload["latest_board"]
+            if "key" in latest and "variant" in latest:
+                pass
+            else:
+                payload["latest_board"] = None
+        if "latest_process" in payload and isinstance(payload["latest_process"], dict):
+            latest_proc = payload["latest_process"]
+            if "key" in latest_proc and "variant" in latest_proc:
+                pass
+            else:
+                payload["latest_process"] = None
+        return payload
+
+    @staticmethod
+    def _parse_plot_reference(name: str) -> Tuple[Optional[str], Optional[str]]:
+        if not isinstance(name, str):
+            return None, None
+        if not name.startswith("power_"):
+            return None, None
+        remainder = name[len("power_") :]
+        if "_" not in remainder:
+            return None, None
+        prefix, suffix = remainder.rsplit("_", 1)
+        variant = suffix if suffix in ("board", "process") else None
+        key = prefix or None
+        return key, variant
 
     def _merge_combined_log(
         self,
@@ -595,7 +727,7 @@ class JetsonPowerLogger:
         label_text = label.strip() if isinstance(label, str) else "unresolved"
         key = self._sanitize_resolution_label(label_text)
         timestamp = metadata.get("written_at", time.time())
-        combined_payload["version"] = 2
+        combined_payload["version"] = 3
         combined_payload["updated_at"] = timestamp
         logs_section = combined_payload.setdefault("logs", {})
         entry: Dict[str, Any] = {
@@ -603,10 +735,12 @@ class JetsonPowerLogger:
             "key": key,
             "updated_at": timestamp,
             "resolution": resolution_meta,
-            "board": board_payload,
+            "variants": {
+                "board": board_payload,
+            },
         }
         if process_payload.get("samples"):
-            entry["process"] = process_payload
+            entry["variants"]["process"] = process_payload
         logs_section[key] = entry
 
         plots_section = combined_payload.setdefault("plots", {})
@@ -614,7 +748,8 @@ class JetsonPowerLogger:
         plots_section[board_plot_key] = {
             "type": "power",
             "title": self._plot_title(label_text or key, variant="board"),
-            "payload": board_payload,
+            "log_key": key,
+            "variant": "board",
             "use_process_power": False,
         }
 
@@ -623,14 +758,26 @@ class JetsonPowerLogger:
             plots_section[process_plot_key] = {
                 "type": "power",
                 "title": self._plot_title(label_text or key, variant="process"),
-                "payload": process_payload,
+                "log_key": key,
+                "variant": "process",
                 "use_process_power": True,
             }
         else:
             plots_section.pop(process_plot_key, None)
 
-        combined_payload["latest_board"] = board_payload
-        combined_payload["latest_process"] = process_payload if process_payload.get("samples") else None
+        combined_payload["latest_board"] = {
+            "key": key,
+            "variant": "board",
+            "updated_at": timestamp,
+        }
+        if process_payload.get("samples"):
+            combined_payload["latest_process"] = {
+                "key": key,
+                "variant": "process",
+                "updated_at": timestamp,
+            }
+        else:
+            combined_payload["latest_process"] = None
         return combined_payload
 
     @staticmethod
