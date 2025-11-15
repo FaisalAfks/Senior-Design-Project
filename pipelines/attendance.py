@@ -482,12 +482,17 @@ class AttendancePipeline:
                 frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or resolved_width
                 display_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
 
+            if callbacks and callbacks.wait_for_next_person:
+                continue_hint = "Click Next Person to continue or Stop Session to exit"
+            else:
+                continue_hint = "Press SPACE to continue or ESC to close"
             final_display = compose_final_display(
                 display_frame,
                 summary,
                 show_spoof_score=self.spoof_service is not None and self.show_summary_scores,
                 show_scores=self.show_summary_scores,
                 minimal_mode=self.minimal_overlay,
+                continue_hint=continue_hint,
             )
             annotated_final = self._annotate_metrics(final_display, cycle.metrics)
             if callbacks and callbacks.on_final_frame:

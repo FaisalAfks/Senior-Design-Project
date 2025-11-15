@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -16,6 +17,7 @@ def parse_main_args(
     argv: Optional[Sequence[str]] = None,
 ) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Face verification with optional alignment guidance.")
+    default_source = "csi://0" if os.name != "nt" else "0"
 
     capture_group = parser.add_argument_group("Capture settings")
     capture_group.add_argument(
@@ -26,8 +28,8 @@ def parse_main_args(
     )
     capture_group.add_argument(
         "--source",
-        default="csi://0",
-        help="Camera index (e.g. 0) or path to a video file (csi://0) for jetson.",
+        default=default_source,
+        help="Camera index (e.g. 0) or path to a video file (csi://0 on Jetson).",
     )
     capture_group.add_argument(
         "--camera-width",
@@ -158,6 +160,12 @@ def parse_main_args(
         type=int,
         default=10,
         help="Number of consecutive aligned frames before verification begins.",
+    )
+    guidance_group.add_argument(
+        "--guidance-crop-padding",
+        type=float,
+        default=0.5,
+        help="Fractional padding applied when cropping verification frames to the guidance box.",
     )
 
     power_group = parser.add_argument_group("Jetson power logging")

@@ -12,6 +12,7 @@ from BlazeFace import BlazeFaceService, Detection
 from DeePixBis import DeePixBiSService
 from MobileFaceNet import MobileFaceNetService, RecognitionResult
 from utils.overlay import BannerStyle, PanelStyle, draw_center_banner, draw_text_panel
+from .guidance import GuidanceBox
 
 
 @dataclass
@@ -61,6 +62,21 @@ class FaceEvaluator:
             self.spoof_threshold,
         )
         return observation, {}
+
+
+def _crop_frame_to_guidance(frame: np.ndarray, box: GuidanceBox, padding_ratio: float) -> Optional[np.ndarray]:
+    height, width = frame.shape[:2]
+    cx, cy = box.center
+    half = max(1, int(box.half_side))
+    padding_ratio = max(0.0, float(padding_ratio))
+    pad = int(round(half * padding_ratio))
+    left = max(0, cx - half - pad)
+    right = min(width, cx + half + pad)
+    top = max(0, cy - half - pad)
+    bottom = min(height, cy + half + pad)
+    if right - left < 20 or bottom - top < 20:
+        return None
+    return frame[top:bottom, left:right]
 
 
 def evaluate_frame_with_timing(
@@ -203,6 +219,7 @@ def compose_final_display(
     show_spoof_score: bool,
     show_scores: bool = True,
     minimal_mode: bool = False,
+    continue_hint: Optional[str] = "Press SPACE to continue or ESC to close",
 ) -> np.ndarray:
     annotated = frame.copy()
     status_text = "ACCESS GRANTED" if summary["accepted"] else "ACCESS DENIED"
@@ -210,7 +227,7 @@ def compose_final_display(
 
     if minimal_mode:
         identity = summary["identity"] or "Unknown"
-        text = f"{status_text} — {identity}"
+        text = f"{status_text}: {identity}"
         return draw_center_banner(
             annotated,
             text,
@@ -268,12 +285,13 @@ def compose_final_display(
         ),
     )
 
-    annotated = draw_center_banner(
-        annotated,
-        "Press SPACE to continue or ESC to close",
-        position="bottom",
-        style=BannerStyle(bg_color=(30, 30, 30), alpha=0.5, font_scale=0.7, margin=16),
-    )
+    if continue_hint:
+        annotated = draw_center_banner(
+            annotated,
+            continue_hint,
+            position="bottom",
+            style=BannerStyle(bg_color=(30, 30, 30), alpha=0.5, font_scale=0.7, margin=16),
+        )
     return annotated
 
 
@@ -358,6 +376,8 @@ def run_verification_phase(
     poll_cancel: Optional[Callable[[], bool]] = None,
     collect_timings: bool = False,
     minimal_mode: bool = False,
+    guidance_box: Optional[GuidanceBox] = None,
+    guidance_padding: float = 0.2,
 ) -> Tuple[List[FaceObservation], Optional[np.ndarray], float, Dict[str, float]]:
     observations: List[FaceObservation] = []
     last_frame: Optional[np.ndarray] = None
@@ -386,9 +406,16 @@ def run_verification_phase(
             break
         if frame_transform is not None:
             frame = frame_transform(frame)
-        last_frame = frame.copy()
+        display_frame = frame.copy()
+        work_frame = frame
+        if guidance_box is not None:
+            cropped = _crop_frame_to_guidance(frame, guidance_box, guidance_padding)
+            if cropped is None:
+                continue
+            work_frame = cropped
+        last_frame = display_frame.copy()
 
-        observation, timings = evaluator.evaluate(frame, collect_timings=collect_timings)
+        observation, timings = evaluator.evaluate(work_frame, collect_timings=collect_timings)
         if collect_timings:
             for key in timing_sums:
                 timing_sums[key] += timings.get(key, 0.0)
@@ -401,7 +428,7 @@ def run_verification_phase(
         frame_duration = max(1e-6, frame_now - prev_frame_time)
         prev_frame_time = frame_now
 
-        overlay = frame.copy()
+        overlay = display_frame.copy()
         if not minimal_mode:
             identity_scores = [obs.identity_score for obs in observations if obs.identity_score is not None]
             avg_identity = sum(identity_scores) / len(identity_scores) if identity_scores else None
@@ -429,20 +456,20 @@ def run_verification_phase(
                 style=PanelStyle(margin=20, padding=10, font_scale=0.65, line_spacing=4, alpha=0.55),
             )
         if display_callback is not None:
-            display_frame = overlay if not minimal_mode else frame
+            display_image = overlay if not minimal_mode else display_frame
             if minimal_mode and not observation:
-                display_frame = draw_center_banner(
-                    display_frame,
+                display_image = draw_center_banner(
+                    display_image,
                     "Capturing verification frames...",
                     position="top",
                     style=BannerStyle(bg_color=(20, 20, 20), text_color=(255, 255, 0), alpha=0.7, margin=24),
                 )
-            display_callback(display_frame)
+            display_callback(display_image)
         elif window_name is not None:
             if not minimal_mode:
                 cv2.imshow(window_name, overlay)
             else:
-                cv2.imshow(window_name, frame)
+                cv2.imshow(window_name, display_frame)
             key = cv2.waitKey(1) & 0xFF
             if key in (27, ord("q")):
                 break

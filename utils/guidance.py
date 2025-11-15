@@ -25,6 +25,12 @@ class AlignmentAssessment:
         return self.centered and self.sized and self.leveled
 
 
+@dataclass
+class GuidanceBox:
+    center: Tuple[int, int]
+    half_side: int
+
+
 def evaluate_alignment(
     detection: Detection,
     box_center: Tuple[float, float],
@@ -167,17 +173,17 @@ def run_guidance_phase(
     frame_transform: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     display_callback: Optional[Callable[[np.ndarray], None]] = None,
     poll_cancel: Optional[Callable[[], bool]] = None,
-) -> bool:
+) -> Tuple[bool, Optional[GuidanceBox]]:
     """Drive the alignment logic independent of any specific UI."""
     consecutive_good = 0
     hold_frames = max(1, getattr(args, "guidance_hold_frames", 1))
 
     while True:
         if poll_cancel is not None and poll_cancel():
-            return False
+            return False, None
         ok, frame = capture.read()
         if not ok:
-            return False
+            return False, None
         if frame_transform is not None:
             frame = frame_transform(frame)
 
@@ -226,7 +232,7 @@ def run_guidance_phase(
             display_callback(display)
 
         if poll_cancel is not None and poll_cancel():
-            return False
+            return False, None
 
         if consecutive_good >= hold_frames:
-            return True
+            return True, GuidanceBox(center=box_center, half_side=half_side)

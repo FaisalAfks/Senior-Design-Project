@@ -11,7 +11,7 @@ from BlazeFace import BlazeFaceService
 from DeePixBis import DeePixBiSService
 from MobileFaceNet import MobileFaceNetService
 
-from .guidance import run_guidance_phase
+from .guidance import GuidanceBox, run_guidance_phase
 from .verification import FaceObservation, run_verification_phase
 
 
@@ -60,6 +60,8 @@ class SessionRunner:
         self._verification_display_callback = verification_display_callback
         self._poll_cancel_callback = poll_cancel_callback
         self._wait_for_next_callback = wait_for_next_callback
+        self._guidance_box: Optional[GuidanceBox] = None
+        self._guidance_padding = float(getattr(args, "guidance_crop_padding", 0.2))
 
     def run_cycle(
         self,
@@ -68,9 +70,10 @@ class SessionRunner:
         on_activity_change: Optional[Callable[[str], None]] = None,
     ) -> Optional[SessionCycle]:
         if require_guidance:
+            self._guidance_box = None
             if on_activity_change is not None:
                 on_activity_change("guidance")
-            proceed = run_guidance_phase(
+            proceed, guidance_box = run_guidance_phase(
                 self.capture,
                 self.detector,
                 self.args,
@@ -82,6 +85,7 @@ class SessionRunner:
             )
             if not proceed:
                 return None
+            self._guidance_box = guidance_box
         else:
             if not self.window_adjusted:
                 adjust_window_to_capture(self.capture, self.window_name, self.window_limits)
@@ -103,6 +107,8 @@ class SessionRunner:
             display_callback=self._display_verification_frame,
             poll_cancel=self._poll_guidance_cancel,
             collect_timings=True,
+            guidance_box=self._guidance_box,
+            guidance_padding=self._guidance_padding,
         )
         return SessionCycle(observations=observations, last_frame=last_frame, duration=duration, metrics=metrics)
 

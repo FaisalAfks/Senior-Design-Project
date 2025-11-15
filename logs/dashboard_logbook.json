@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "selected_page_id": "2398dc9eef3040eb876694e4e220a956",
+  "pages": [
+    {
+      "id": "cb8cd8775c484449a9d3cddcb22b5e8a",
+      "name": "Session 1",
+      "created_at": "2025-11-14T20:19:08+00:00",
+      "updated_at": "2025-11-14T20:19:13+00:00",
+      "entries": [
+        {
+          "frames_with_detections": 8,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9647395089268684,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 0.9229250999633223,
+          "timestamp": "2025-11-14T20:19:13.084566+00:00",
+          "source": "0"
+        }
+      ]
+    },
+    {
+      "id": "86fef6f32e8e4bbfaae5da5b073a1758",
+      "name": "Session 2",
+      "created_at": "2025-11-14T21:11:03+00:00",
+      "updated_at": "2025-11-14T21:13:11+00:00",
+      "entries": [
+        {
+          "frames_with_detections": 10,
+          "recognized": true,
+          "identity": "Test",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9794201135635376,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 0.9059985000640154,
+          "timestamp": "2025-11-14T21:13:11.978818+00:00",
+          "source": "0"
+        },
+        {
+          "frames_with_detections": 10,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9781297981739044,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 0.9898467001039535,
+          "timestamp": "2025-11-14T21:11:06.866830+00:00",
+          "source": "0"
+        }
+      ]
+    },
+    {
+      "id": "2398dc9eef3040eb876694e4e220a956",
+      "name": "Test Reject",
+      "created_at": "2025-11-15T10:04:43+00:00",
+      "updated_at": "2025-11-15T10:08:53+00:00",
+      "entries": [
+        {
+          "frames_with_detections": 8,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.959238238632679,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 0.9579743000213057,
+          "timestamp": "2025-11-15T10:04:48.372788+00:00",
+          "source": "0"
+        }
+      ]
+    }
+  ]
+}
