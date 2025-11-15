@@ -140,13 +140,13 @@ def parse_main_args(
     guidance_group.add_argument(
         "--guidance-center-tolerance",
         type=float,
-        default=0.3,
+        default=0.2,
         help="Fraction of the square half-side tolerated for centering during guidance.",
     )
     guidance_group.add_argument(
         "--guidance-size-tolerance",
         type=float,
-        default=0.3,
+        default=0.2,
         help="Fractional tolerance for face size vs square during guidance.",
     )
     guidance_group.add_argument(
@@ -164,7 +164,7 @@ def parse_main_args(
     guidance_group.add_argument(
         "--guidance-crop-padding",
         type=float,
-        default=0.5,
+        default=0.75,
         help="Fractional padding applied when cropping verification frames to the guidance box.",
     )
 
