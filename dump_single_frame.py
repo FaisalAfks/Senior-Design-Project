@@ -134,13 +134,16 @@ def main() -> None:
     if spoof_crop is not None:
         cv2.imwrite(str(output_dir / f"{timestamp}_spoof_input.png"), spoof_crop)
 
+    def _to_float(value: Optional[float]) -> Optional[float]:
+        return None if value is None else float(value)
+
     summary: Dict[str, object] = {
         "timestamp": timestamp,
         "frame": str(args.frame),
-        "detector_score": best_det.score,
+        "detector_score": float(best_det.score),
         "identity": identity_name,
-        "identity_score": recognition_score,
-        "spoof_score": spoof_score,
+        "identity_score": _to_float(recognition_score),
+        "spoof_score": _to_float(spoof_score),
         "recognized": is_recognized,
         "accepted": accepted,
         "identity_threshold": args.identity_thr,
@@ -167,4 +170,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

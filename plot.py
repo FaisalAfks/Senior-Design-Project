@@ -15,6 +15,103 @@ ROOT = Path(__file__).resolve().parent
 LOGS_DIR = ROOT / "logs"
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
+
+def _infer_bucket(name: str) -> str:
+    lowered = name.lower()
+    if "validation" in lowered:
+        return "validation"
+    if "test" in lowered or "holdout" in lowered:
+        return "testing"
+    return "general"
+
+
+def _export_figures(
+    figures: List[plt.Figure],
+    *,
+    args: argparse.Namespace,
+    name: str,
+    interactive_pool: List[plt.Figure],
+    bucket_hint: Optional[str] = None,
+) -> None:
+    for idx, fig in enumerate(figures):
+        target_path: Optional[Path] = None
+        if args.output_dir:
+            filename = f"{name}.png" if len(figures) == 1 else f"{name}_{idx + 1}.png"
+            bucket = bucket_hint or _infer_bucket(name)
+            bucket_dir = args.output_dir / bucket
+            bucket_dir.mkdir(parents=True, exist_ok=True)
+            target_path = bucket_dir / filename
+        elif args.output:
+            target_path = args.output
+
+        if target_path is not None:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(target_path, dpi=args.dpi)
+            print(f"Saved figure to {target_path}")
+            if args.show or (not args.output and not args.output_dir):
+                interactive_pool.append(fig)
+            else:
+                plt.close(fig)
+        else:
+            interactive_pool.append(fig)
+
+
+def _handle_power_payload(args: argparse.Namespace, payload: Dict[str, Any]) -> None:
+    fig = render_power_plot(payload, title=args.title, use_process_power=args.process_power)
+    interactive_pool: List[plt.Figure] = []
+    _export_figures([fig], args=args, name=Path(args.metrics).stem, interactive_pool=interactive_pool, bucket_hint="power")
+    if interactive_pool:
+        plt.show()
+
+
+def _handle_confusion_payload(args: argparse.Namespace, payload: Dict[str, Any]) -> None:
+    matrices = payload.get("confusion_matrices")
+    if not matrices:
+        raise RuntimeError(f"No confusion matrices found in {args.metrics}")
+
+    entry = pick_entry(matrices, threshold=args.threshold, strategy=args.strategy)
+
+    scale = 100.0 if entry["threshold"] > 1.0 else 1.0
+    display_threshold_val = entry["threshold"] / scale if scale else entry["threshold"]
+    display_threshold = (
+        f"{display_threshold_val:.4f}".rstrip("0").rstrip(".") if isinstance(display_threshold_val, (int, float)) else str(display_threshold_val)
+    )
+
+    metrics_name = payload.get("name") or Path(args.metrics).stem
+    name_lower = metrics_name.lower()
+    metrics_path_lower = str(args.metrics).lower()
+    if "spoof" in name_lower or "spoof" in metrics_path_lower:
+        class_labels = ("Real", "Spoof")
+    else:
+        class_labels = ("Known", "Unknown")
+
+    if args.title:
+        title = args.title
+    else:
+        dataset = payload.get("dataset_root", "")
+        prefix = metrics_name
+        title_parts = [prefix, f"thr={display_threshold}"]
+        if dataset:
+            title_parts.append(Path(dataset).name)
+        title = " | ".join(title_parts)
+
+    fig = render_confusion_matrix(
+        entry,
+        title=title,
+        display_threshold=display_threshold,
+        class_labels=class_labels,
+    )
+
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(args.output, dpi=args.dpi)
+        print(f"Saved figure to {args.output}")
+
+    if args.show or not args.output:
+        plt.show()
+    else:
+        plt.close(fig)
+
 ACTIVITY_CANONICAL = {
     "initializing": "setup",
     "camera-initialization": "setup",
@@ -123,6 +220,184 @@ def load_metrics(path: Path) -> Dict[str, Any]:
         raise FileNotFoundError(
             "Metrics file not found; checked: " + ", ".join(search_paths)
         ) from exc
+
+
+def handle_composite_plots(args: argparse.Namespace, payload: Dict[str, Any]) -> bool:
+    plots_section = payload.get("plots") if isinstance(payload, dict) else None
+    if not isinstance(plots_section, dict) or not plots_section:
+        return False
+
+    available_names = list(plots_section.keys())
+    if args.list_plots or not args.plot_names:
+        print("Available plots:")
+        for name in available_names:
+            title = plots_section.get(name, {}).get("title", name)
+            print(f" - {name}: {title}")
+        if not args.plot_names:
+            print("Re-run with --plot <name> (or --plot all) to render a plot.")
+        return True
+
+    if args.output and args.output_dir:
+        raise SystemExit("Use either --output or --output-dir, not both.")
+
+    selected_names: List[str] = []
+    for raw_name in args.plot_names or []:
+        if raw_name.lower() == "all":
+            for candidate in available_names:
+                if candidate not in selected_names:
+                    selected_names.append(candidate)
+            continue
+        if raw_name not in plots_section:
+            available_display = ", ".join(available_names)
+            raise SystemExit(f"Unknown plot '{raw_name}'. Available plots: {available_display}")
+        if raw_name not in selected_names:
+            selected_names.append(raw_name)
+
+    if not selected_names:
+        raise SystemExit("No plots selected.")
+    if args.output and len(selected_names) > 1:
+        raise SystemExit("Cannot use --output when rendering multiple plots; use --output-dir instead.")
+
+    interactive_figures: List[plt.Figure] = []
+    if args.output_dir:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in selected_names:
+        config = plots_section.get(name, {})
+        plot_type = config.get("type") or ("accuracy" if "series" in config else "confusion")
+
+        if args.title and len(selected_names) == 1:
+            plot_title = args.title
+        else:
+            plot_title = config.get("title", name)
+
+        plot_subtitle = config.get("subtitle")
+        plot_figures: List[plt.Figure] = []
+        if isinstance(plot_subtitle, str) and plot_subtitle:
+            plot_title = f"{plot_title} | {plot_subtitle}" if plot_title else plot_subtitle
+
+        if plot_type == "accuracy":
+            series_specs = config.get("series", [])
+            if name.startswith("spoof_") and len(series_specs) > 1:
+                for spec in series_specs:
+                    label = spec.get("label", "Series")
+                    entries = spec.get("entries")
+                    if not entries:
+                        continue
+                    fig = render_accuracy_plot(
+                        [(label, entries)],
+                        title=f"{plot_title} | {label}",
+                        xlabel=config.get("xlabel", "Threshold"),
+                    )
+                    if fig is not None:
+                        plot_figures.append(fig)
+            else:
+                fig = render_accuracy_plot(
+                    [(spec.get("label", f"Series {idx + 1}"), spec.get("entries", [])) for idx, spec in enumerate(series_specs)],
+                    title=plot_title,
+                    xlabel=config.get("xlabel", "Threshold"),
+                )
+                if fig is not None:
+                    plot_figures.append(fig)
+        elif plot_type == "confusion":
+            entry = config.get("entry")
+            if entry is None:
+                matrices = config.get("confusion_matrices") or config.get("matrices")
+                if matrices:
+                    default_thr = config.get("threshold")
+                    if default_thr is None:
+                        default_thr = config.get("default_threshold")
+                    entry = pick_entry(matrices, threshold=default_thr, strategy=config.get("strategy", args.strategy))
+            if entry is None:
+                print(f"Skipping plot '{name}' (missing confusion matrix entry).")
+                continue
+            threshold_value = entry.get("threshold")
+            scale = 100.0 if threshold_value and threshold_value > 1.0 else 1.0
+            display_value = threshold_value / scale if scale else threshold_value
+            display_threshold = (
+                f"{display_value:.4f}".rstrip("0").rstrip(".") if isinstance(display_value, (int, float)) else str(display_value)
+            )
+            labels_override = config.get("labels")
+            if isinstance(labels_override, list) and len(labels_override) == 2:
+                class_labels = (labels_override[0], labels_override[1])
+            else:
+                lower_name = name.lower()
+                if "spoof" in lower_name:
+                    class_labels = ("Real", "Spoof")
+                elif "detector" in lower_name:
+                    class_labels = ("Face", "No Face")
+                elif "pipeline" in lower_name:
+                    class_labels = ("Accept", "Reject")
+                else:
+                    class_labels = ("Known", "Unknown")
+            fig = render_confusion_matrix(
+                entry,
+                title=plot_title,
+                display_threshold=display_threshold,
+                class_labels=class_labels,
+            )
+            if fig is not None:
+                plot_figures.append(fig)
+        elif plot_type == "power":
+            payload_value = config.get("payload")
+            if isinstance(payload_value, dict):
+                log_payload = payload_value
+            else:
+                log_payload = None
+                log_spec = None
+                for key in ("log", "log_path", "path", "file", "metrics"):
+                    spec_candidate = config.get(key)
+                    if spec_candidate is not None:
+                        log_spec = spec_candidate
+                        break
+                if log_spec is None:
+                    print(f"Skipping plot '{name}' (no power log specified).")
+                    continue
+                if isinstance(log_spec, (list, tuple)):
+                    print(f"Skipping plot '{name}' (list of power logs not supported).")
+                    continue
+                candidate_path = resolve_metrics_path(Path(log_spec))
+                try:
+                    with candidate_path.open("r", encoding="utf-8") as handle:
+                        log_payload = json.load(handle)
+                except FileNotFoundError:
+                    print(f"Skipping plot '{name}' (power log not found: {candidate_path})")
+                    continue
+            if not isinstance(log_payload, dict):
+                print(f"Skipping plot '{name}' (invalid power log payload).")
+                continue
+            flag_override = config.get("use_process_power")
+            if isinstance(flag_override, bool):
+                use_process = flag_override
+            else:
+                use_process = args.process_power
+            fig = render_power_plot(log_payload, title=plot_title, use_process_power=use_process)
+            if fig is not None:
+                plot_figures.append(fig)
+        else:
+            print(f"Skipping plot '{name}' (unsupported type: {plot_type}).")
+            continue
+
+        if not plot_figures:
+            print(f"Skipping plot '{name}' (insufficient data).")
+            continue
+
+        if args.output and len(plot_figures) > 1:
+            raise SystemExit("Cannot save multiple figures to a single --output file; use --output-dir instead.")
+
+        bucket_hint = config.get("bucket") if isinstance(config.get("bucket"), str) else None
+        _export_figures(plot_figures, args=args, name=name, interactive_pool=interactive_figures, bucket_hint=bucket_hint)
+
+    if not interactive_figures and not (args.output_dir and not args.show):
+        print("No plots were generated.")
+
+    if interactive_figures:
+        if args.show or (not args.output and not args.output_dir):
+            plt.show()
+        else:
+            for fig in interactive_figures:
+                plt.close(fig)
+    return True
 
 
 def pick_entry(
@@ -582,17 +857,32 @@ def render_power_plot(
     times: List[float] = []
     power_values: List[float] = []
     process_descriptor: Optional[str] = None
+    process_meta = log_payload.get("process")
+    if isinstance(process_meta, dict):
+        pid_meta = process_meta.get("pid")
+        name_meta = process_meta.get("name")
+        if pid_meta is not None and name_meta:
+            process_descriptor = f"PID {pid_meta} ({name_meta})"
+        elif pid_meta is not None:
+            process_descriptor = f"PID {pid_meta}"
+        elif name_meta:
+            process_descriptor = str(name_meta)
     for sample in samples:
         if use_process_power:
             process_info = sample.get("process")
-            if not isinstance(process_info, dict):
-                continue
-            total_power = process_info.get("estimated_power_w")
+            if isinstance(process_info, dict):
+                total_power = process_info.get("estimated_power_w")
+                pid_candidate = process_info.get("pid")
+                name_candidate = process_info.get("name")
+            else:
+                total_power = sample.get("estimated_power_w")
+                pid_candidate = None
+                name_candidate = None
             if total_power is None:
                 continue
             if process_descriptor is None:
-                pid = process_info.get("pid")
-                name = process_info.get("name")
+                pid = pid_candidate
+                name = name_candidate
                 if pid is not None and name:
                     process_descriptor = f"PID {pid} ({name})"
                 elif pid is not None:
@@ -853,264 +1143,19 @@ def main() -> None:
     args = parse_args()
     payload = load_metrics(args.metrics)
 
-    plots_section = payload.get("plots") if isinstance(payload, dict) else None
-    if isinstance(plots_section, dict) and plots_section:
-        available_names = list(plots_section.keys())
-        if args.list_plots or not args.plot_names:
-            print("Available plots:")
-            for name in available_names:
-                title = plots_section.get(name, {}).get("title", name)
-                print(f" - {name}: {title}")
-            if not args.plot_names:
-                print("Re-run with --plot <name> (or --plot all) to render a plot.")
-            return
-
-        if args.output and args.output_dir:
-            raise SystemExit("Use either --output or --output-dir, not both.")
-
-        selected_names: List[str] = []
-        for raw_name in args.plot_names or []:
-            if raw_name.lower() == "all":
-                for candidate in available_names:
-                    if candidate not in selected_names:
-                        selected_names.append(candidate)
-                continue
-            if raw_name not in plots_section:
-                available_display = ", ".join(available_names)
-                raise SystemExit(f"Unknown plot '{raw_name}'. Available plots: {available_display}")
-            if raw_name not in selected_names:
-                selected_names.append(raw_name)
-
-        if not selected_names:
-            raise SystemExit("No plots selected.")
-        if args.output and len(selected_names) > 1:
-            raise SystemExit("Cannot use --output when rendering multiple plots; use --output-dir instead.")
-
-        figures: List[plt.Figure] = []
-        if args.output_dir:
-            args.output_dir.mkdir(parents=True, exist_ok=True)
-
-        for name in selected_names:
-            config = plots_section.get(name, {})
-            plot_type = config.get("type")
-            if plot_type is None:
-                plot_type = "accuracy" if "series" in config else "confusion"
-
-            if args.title and len(selected_names) == 1:
-                plot_title = args.title
-            else:
-                plot_title = config.get("title", name)
-
-            plot_subtitle = config.get("subtitle")
-            plot_figures: List[plt.Figure] = []
-            if isinstance(plot_subtitle, str) and plot_subtitle:
-                plot_title = f"{plot_title} | {plot_subtitle}" if plot_title else plot_subtitle
-
-            if plot_type == "accuracy":
-                series_specs = config.get("series", [])
-                if name.startswith("spoof_") and len(series_specs) > 1:
-                    for spec in series_specs:
-                        label = spec.get("label", "Series")
-                        entries = spec.get("entries")
-                        if not entries:
-                            continue
-                        subplot_title = f"{plot_title} ({label})"
-                        fig = render_accuracy_plot(
-                            [(label, entries)],
-                            title=subplot_title,
-                            xlabel=config.get("xlabel", "Threshold"),
-                        )
-                        if fig is not None:
-                            plot_figures.append(fig)
-                else:
-                    series_data: List[Tuple[str, Sequence[Dict[str, Any]]]] = []
-                    for spec in series_specs:
-                        label = spec.get("label", "Series")
-                        entries = spec.get("entries")
-                        if not entries:
-                            continue
-                        series_data.append((label, entries))
-                    if not series_data:
-                        print(f"Skipping plot '{name}' (no data).")
-                        continue
-                    fig = render_accuracy_plot(
-                        series_data,
-                        title=plot_title,
-                        xlabel=config.get("xlabel", "Threshold"),
-                    )
-                    if fig is not None:
-                        plot_figures.append(fig)
-            elif plot_type == "confusion":
-                confusion_matrices = config.get("confusion_matrices")
-                if not confusion_matrices:
-                    print(f"Skipping plot '{name}' (no confusion matrices).")
-                    continue
-                default_threshold = config.get("default_threshold")
-                threshold_override = args.threshold if args.threshold is not None else default_threshold
-                entry = pick_entry(confusion_matrices, threshold=threshold_override, strategy=args.strategy)
-                threshold_value = entry.get("threshold")
-                scale = 100.0 if threshold_value and threshold_value > 1.0 else 1.0
-                display_value = threshold_value / scale if scale else threshold_value
-                display_threshold = (
-                    f"{display_value:.4f}".rstrip("0").rstrip(".")
-                    if isinstance(display_value, (int, float))
-                    else str(display_value)
-                )
-                labels_override = config.get("labels")
-                if isinstance(labels_override, list) and len(labels_override) == 2:
-                    class_labels = (labels_override[0], labels_override[1])
-                else:
-                    lower_name = name.lower()
-                    if "spoof" in lower_name:
-                        class_labels = ("Real", "Spoof")
-                    elif "detector" in lower_name:
-                        class_labels = ("Face", "No Face")
-                    elif "pipeline" in lower_name:
-                        class_labels = ("Accept", "Reject")
-                    else:
-                        class_labels = ("Known", "Unknown")
-                fig = render_confusion_matrix(
-                    entry,
-                    title=plot_title,
-                    display_threshold=display_threshold,
-                    class_labels=class_labels,
-                )
-                if fig is not None:
-                    plot_figures.append(fig)
-            elif plot_type == "power":
-                payload_value = config.get("payload")
-                if isinstance(payload_value, dict):
-                    log_payload = payload_value
-                else:
-                    log_payload = None
-                    log_spec = None
-                    for key in ("log", "log_path", "path", "file", "metrics"):
-                        spec_candidate = config.get(key)
-                        if spec_candidate is not None:
-                            log_spec = spec_candidate
-                            break
-                    if log_spec is None:
-                        print(f"Skipping plot '{name}' (no power log specified).")
-                        continue
-                    if isinstance(log_spec, (list, tuple)):
-                        print(f"Skipping plot '{name}' (list of power logs not supported).")
-                        continue
-                    candidate_path = resolve_metrics_path(Path(log_spec))
-                    try:
-                        with candidate_path.open("r", encoding="utf-8") as handle:
-                            log_payload = json.load(handle)
-                    except FileNotFoundError:
-                        print(f"Skipping plot '{name}' (power log not found: {candidate_path})")
-                        continue
-                if not isinstance(log_payload, dict):
-                    print(f"Skipping plot '{name}' (invalid power log payload).")
-                    continue
-                fig = render_power_plot(log_payload, title=plot_title, use_process_power=args.process_power)
-                if fig is not None:
-                    plot_figures.append(fig)
-            else:
-                print(f"Skipping plot '{name}' (unsupported type: {plot_type}).")
-                continue
-
-            if not plot_figures:
-                print(f"Skipping plot '{name}' (insufficient data).")
-                continue
-
-            if args.output and len(plot_figures) > 1:
-                raise SystemExit("Cannot save multiple figures to a single --output file; use --output-dir instead.")
-
-            for idx_fig, fig in enumerate(plot_figures):
-                target_path: Optional[Path] = None
-                if args.output_dir:
-                    filename = f"{name}.png" if len(plot_figures) == 1 else f"{name}_{idx_fig + 1}.png"
-                    bucket = "general"
-                    lowered = name.lower()
-                    if "validation" in lowered:
-                        bucket = "validation"
-                    elif "test" in lowered or "holdout" in lowered:
-                        bucket = "testing"
-                    bucket_dir = args.output_dir / bucket
-                    bucket_dir.mkdir(parents=True, exist_ok=True)
-                    target_path = bucket_dir / filename
-                elif args.output:
-                    target_path = args.output
-
-                if target_path is not None:
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    fig.savefig(target_path, dpi=args.dpi)
-                    print(f"Saved figure to {target_path}")
-                    if args.show or (not args.output and not args.output_dir):
-                        figures.append(fig)
-                    else:
-                        plt.close(fig)
-                else:
-                    figures.append(fig)
-
-        if not figures and not (args.output_dir and not args.show):
-            print("No plots were generated.")
-
-        if figures:
-            if args.show or (not args.output and not args.output_dir):
-                plt.show()
-            else:
-                for fig in figures:
-                    plt.close(fig)
+    handled = handle_composite_plots(args, payload)
+    if handled:
         return
-    elif args.plot_names or args.list_plots:
+    if args.plot_names or args.list_plots:
         raise SystemExit("This metrics file does not define composite plots.")
 
     if args.output_dir:
         raise SystemExit("--output-dir is only supported when rendering plots from a combined metrics file.")
 
     if is_power_log(payload):
-        fig = render_power_plot(payload, title=args.title, use_process_power=args.process_power)
+        _handle_power_payload(args, payload)
     else:
-        matrices = payload.get("confusion_matrices")
-        if not matrices:
-            raise RuntimeError(f"No confusion matrices found in {args.metrics}")
-
-        entry = pick_entry(matrices, threshold=args.threshold, strategy=args.strategy)
-
-        scale = 100.0 if entry["threshold"] > 1.0 else 1.0
-        display_threshold_val = entry["threshold"] / scale if scale else entry["threshold"]
-        display_threshold = (
-            f"{display_threshold_val:.4f}".rstrip("0").rstrip(".") if isinstance(display_threshold_val, (int, float)) else str(display_threshold_val)
-        )
-
-        metrics_name = payload.get("name") or Path(args.metrics).stem
-        name_lower = metrics_name.lower()
-        metrics_path_lower = str(args.metrics).lower()
-        if "spoof" in name_lower or "spoof" in metrics_path_lower:
-            class_labels = ("Real", "Spoof")
-        else:
-            class_labels = ("Known", "Unknown")
-
-        if args.title:
-            title = args.title
-        else:
-            dataset = payload.get("dataset_root", "")
-            prefix = metrics_name
-            title_parts = [prefix, f"thr={display_threshold}"]
-            if dataset:
-                title_parts.append(Path(dataset).name)
-            title = " | ".join(title_parts)
-
-        fig = render_confusion_matrix(
-            entry,
-            title=title,
-            display_threshold=display_threshold,
-            class_labels=class_labels,
-        )
-
-    if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(args.output, dpi=args.dpi)
-        print(f"Saved figure to {args.output}")
-
-    if args.show or not args.output:
-        plt.show()
-    else:
-        plt.close(fig)
+        _handle_confusion_payload(args, payload)
 
 
 if __name__ == "__main__":

@@ -440,53 +440,25 @@ class JetsonPowerLogger:
         }
         if metadata_context:
             payload["metadata"].update(metadata_context)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self.log_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        self._write_resolution_variants(payload)
-
-    def _write_resolution_variants(self, payload: Dict[str, Any]) -> None:
-        """Persist per-resolution variants with whole-device and pid-specific views."""
-        if not self.log_path:
-            return
-        resolution_meta = (payload.get("metadata") or {}).get("resolution") or {}
-        label = resolution_meta.get("label") or self._resolution_label or "unresolved"
-        safe_label = self._sanitize_resolution_label(str(label))
-        resolution_dir = self._resolution_root_dir() / safe_label
-        resolution_dir.mkdir(parents=True, exist_ok=True)
-
-        whole_device_filename = f"{self.log_path.stem}_whole_device.json"
-        whole_device_path = resolution_dir / whole_device_filename
-        whole_device_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
+        written_ts = time.time()
+        payload["metadata"]["log_variant"] = "board"
+        payload["metadata"]["written_at"] = written_ts
         pid_payload = self._build_pid_payload(payload)
-        pid_filename = self._pid_filename()
-        pid_path = resolution_dir / pid_filename
-        pid_path.write_text(json.dumps(pid_payload, indent=2), encoding="utf-8")
-
-        manifest_path = resolution_dir / "manifest.json"
-        manifest = {
-            "resolution_label": label,
-            "written_at": time.time(),
-            "source_log": str(self.log_path),
-            "whole_device_log": whole_device_filename,
-            "pid_specific_log": pid_filename,
-            "samples": len(payload.get("samples") or []),
-            "pid_samples": len(pid_payload.get("samples") or []),
-        }
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        pid_payload["metadata"]["written_at"] = written_ts
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        combined_payload = self._load_combined_log()
+        merged_payload = self._merge_combined_log(combined_payload, payload, pid_payload)
+        self.log_path.write_text(json.dumps(merged_payload, indent=2), encoding="utf-8")
 
     def _build_pid_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         metadata = dict(payload.get("metadata") or {})
-        metadata["log_variant"] = "pid-specific"
+        metadata["log_variant"] = "process"
         samples = []
         for sample in payload.get("samples") or []:
             process = sample.get("process")
-            if not process:
+            if not isinstance(process, dict):
                 continue
-            entry = {
-                "timestamp": sample.get("timestamp"),
-                "activity": sample.get("activity"),
-                "elapsed_s": sample.get("elapsed_s"),
+            process_entry = {
                 "estimated_power_w": process.get("estimated_power_w"),
                 "cpu_share": process.get("cpu_share"),
                 "gpu_share": process.get("gpu_share"),
@@ -494,7 +466,15 @@ class JetsonPowerLogger:
                 "ram_mb": process.get("ram_mb"),
                 "gpu_mem_mb": process.get("gpu_mem_mb"),
                 "method": process.get("method"),
+                "pid": process.get("pid"),
+                "name": process.get("name"),
+            }
+            entry = {
+                "timestamp": sample.get("timestamp"),
+                "activity": sample.get("activity"),
+                "elapsed_s": sample.get("elapsed_s"),
                 "soc_power_w": sample.get("soc_power_w"),
+                "process": process_entry,
             }
             samples.append(entry)
         return {
@@ -506,20 +486,6 @@ class JetsonPowerLogger:
             "samples": samples,
         }
 
-    def _pid_filename(self) -> str:
-        base = self.log_path.stem or "power_log"
-        pid_label = f"pid{self.process_pid}" if self.process_pid is not None else "pid"
-        return f"{base}_{pid_label}.json"
-
-    def _resolution_root_dir(self) -> Path:
-        base = self.log_path
-        if base.suffix:
-            try:
-                return base.with_suffix("")
-            except ValueError:
-                pass
-        return base
-
     @staticmethod
     def _sanitize_resolution_label(label: str) -> str:
         text = (label or "").strip()
@@ -528,6 +494,88 @@ class JetsonPowerLogger:
         cleaned = "".join(ch if ch.isalnum() or ch in ("_", "-", "x", "X") else "_" for ch in text)
         cleaned = cleaned.strip("_")
         return cleaned.lower() or "unresolved"
+
+    def _empty_combined_log(self) -> Dict[str, Any]:
+        return {
+            "version": 2,
+            "logs": {},
+            "plots": {},
+        }
+
+    def _load_combined_log(self) -> Dict[str, Any]:
+        try:
+            raw = json.loads(self.log_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return self._empty_combined_log()
+        except (OSError, json.JSONDecodeError):
+            return self._empty_combined_log()
+        if not isinstance(raw, dict):
+            return self._empty_combined_log()
+        if "logs" not in raw or not isinstance(raw["logs"], dict):
+            raw["logs"] = {}
+        if "plots" not in raw or not isinstance(raw["plots"], dict):
+            raw["plots"] = {}
+        return raw
+
+    def _merge_combined_log(
+        self,
+        combined_payload: Dict[str, Any],
+        board_payload: Dict[str, Any],
+        process_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        metadata = board_payload.get("metadata") or {}
+        resolution_meta = metadata.get("resolution") or {}
+        label = resolution_meta.get("label") or self._resolution_label or "unresolved"
+        label_text = label.strip() if isinstance(label, str) else "unresolved"
+        key = self._sanitize_resolution_label(label_text)
+        timestamp = metadata.get("written_at", time.time())
+        combined_payload["version"] = 2
+        combined_payload["updated_at"] = timestamp
+        logs_section = combined_payload.setdefault("logs", {})
+        entry: Dict[str, Any] = {
+            "label": label_text or key,
+            "key": key,
+            "updated_at": timestamp,
+            "resolution": resolution_meta,
+            "board": board_payload,
+        }
+        if process_payload.get("samples"):
+            entry["process"] = process_payload
+        logs_section[key] = entry
+
+        plots_section = combined_payload.setdefault("plots", {})
+        board_plot_key = self._plot_key(key, "board")
+        plots_section[board_plot_key] = {
+            "type": "power",
+            "title": self._plot_title(label_text or key, variant="board"),
+            "payload": board_payload,
+            "use_process_power": False,
+        }
+
+        process_plot_key = self._plot_key(key, "process")
+        if process_payload.get("samples"):
+            plots_section[process_plot_key] = {
+                "type": "power",
+                "title": self._plot_title(label_text or key, variant="process"),
+                "payload": process_payload,
+                "use_process_power": True,
+            }
+        else:
+            plots_section.pop(process_plot_key, None)
+
+        combined_payload["latest_board"] = board_payload
+        combined_payload["latest_process"] = process_payload if process_payload.get("samples") else None
+        return combined_payload
+
+    @staticmethod
+    def _plot_key(resolution_key: str, variant: str) -> str:
+        variant_clean = "process" if variant.lower().startswith("process") else "board"
+        return f"power_{resolution_key}_{variant_clean}"
+
+    @staticmethod
+    def _plot_title(label: str, variant: str) -> str:
+        descriptor = "Process" if variant == "process" else "Board"
+        return f"{label} • {descriptor} power"
 
 
 def jetson_power_available() -> bool:

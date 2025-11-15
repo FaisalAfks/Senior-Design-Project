@@ -58,6 +58,12 @@ def _clear_facebank_directory(facebank_root: Path, *, preserve_suffixes: Sequenc
 
     for entry in sorted(facebank_root.iterdir()):
         try:
+            if entry.name.startswith("."):
+                if entry.is_dir():
+                    summary["skipped_files"].append(entry.name + "/")
+                else:
+                    summary["skipped_files"].append(entry.name)
+                continue
             if entry.is_dir():
                 shutil.rmtree(entry)
                 summary["removed_dirs"].append(entry.name)
