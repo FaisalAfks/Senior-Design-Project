@@ -164,6 +164,7 @@ class JetsonPowerLogger:
                 print(f"[Power] Logging finished with {len(self._samples)} samples (warning: {self._last_error}).")
             else:
                 print(f"[Power] Logging finished with {len(self._samples)} samples.")
+        self._reset_after_stop()
 
     def set_activity(self, activity: str) -> None:
         if not self.enabled:
@@ -524,6 +525,21 @@ class JetsonPowerLogger:
         combined_payload = self._load_combined_log()
         merged_payload = self._merge_combined_log(combined_payload, payload, pid_payload)
         self.log_path.write_text(json.dumps(merged_payload, indent=2), encoding="utf-8")
+
+    def _reset_after_stop(self) -> None:
+        self._stop_event = threading.Event()
+        self._sample_event = threading.Event()
+        with self._lock:
+            self._activity_events.clear()
+            self._samples.clear()
+            self._activity_sample_counts.clear()
+            self._metadata_context.clear()
+            self._activity = "initializing"
+            self._start_timestamp = None
+            self._end_timestamp = None
+            self._last_error = None
+            self._resolution_label = "unresolved"
+            self._activity_condition = threading.Condition(self._lock)
 
     def _build_pid_payload(self, metadata: Dict[str, Any], samples: List[Dict[str, Any]]) -> Dict[str, Any]:
         metadata = dict(metadata)

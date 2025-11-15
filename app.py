@@ -2,6 +2,7 @@
 """Modernised attendance demo app with a dashboard-style layout."""
 from __future__ import annotations
 
+import atexit
 import csv
 import json
 import shutil
@@ -11,7 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable, Dict, Iterable, List, Optional
+from collections.abc import Iterable, Sequence
+from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
 import cv2
@@ -53,6 +55,12 @@ def _resolve_source(spec: str) -> int | str:
 
 def _format_exception(exc: BaseException) -> str:
     return "".join(traceback.format_exception(exc.__class__, exc, exc.__traceback__))
+
+
+def _show_error_dialog(title: str, message: str, *, parent: Optional[tk.Misc] = None) -> None:
+    """Mirror UI error dialogs to the terminal for easier debugging."""
+    print(f"[Dashboard][Error] {title}: {message}")
+    messagebox.showerror(title, message, parent=parent)
 
 
 def _sanitize_identity_name(name: str) -> str:
@@ -319,12 +327,11 @@ class AttendanceSessionController:
             return
         self._stop.clear()
         self._error_handler = on_error
-        args = self.config.to_pipeline_args()
-        self.pipeline = AttendancePipeline(args)
-        self.capture_context = self.pipeline.open_capture()
-        self.pipeline.show_summary_scores = self.config.display_scores
+        pipeline = self._ensure_pipeline()
+        self.capture_context = pipeline.open_capture()
+        pipeline.show_summary_scores = self.config.display_scores
         merged_callbacks = self._wrap_callbacks(callbacks)
-        self.session_runner = self.pipeline.build_session_runner(
+        self.session_runner = pipeline.build_session_runner(
             self.capture_context.capture,
             window_name="Dashboard Session",
             window_limits=(self.capture_context.display_width, self.capture_context.display_height),
@@ -337,11 +344,9 @@ class AttendanceSessionController:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3.0)
-        if self.pipeline and self.capture_context:
-            self.pipeline.close_capture(self.capture_context)
-        self.pipeline = None
-        self.capture_context = None
+        self._release_capture()
         self.session_runner = None
+        self._thread = None
 
     def _run_session(self, callbacks: SessionCallbacks) -> None:
         if self.pipeline is None or self.capture_context is None:
@@ -363,9 +368,7 @@ class AttendanceSessionController:
         except Exception as exc:
             self._handle_run_exception(exc)
         finally:
-            if self.pipeline and self.capture_context:
-                self.pipeline.close_capture(self.capture_context)
-            self.capture_context = None
+            self._release_capture()
 
     def _wrap_callbacks(self, callbacks: SessionCallbacks) -> SessionCallbacks:
         def poll_cancel() -> bool:
@@ -381,11 +384,11 @@ class AttendanceSessionController:
             if callbacks.on_status:
                 callbacks.on_status(text)
 
-        def stage_change(text: str) -> None:
+        def stage_change(stage: str) -> None:
             if self._stop.is_set():
                 return
             if callbacks.on_stage_change:
-                callbacks.on_stage_change(text)
+                callbacks.on_stage_change(stage)
 
         return SessionCallbacks(
             on_guidance_frame=callbacks.on_guidance_frame,
@@ -422,6 +425,27 @@ class AttendanceSessionController:
         pipeline.recogniser.rebuild_facebank(self.config.facebank_dir)
         return True
 
+    def _release_capture(self) -> None:
+        if self.pipeline and self.capture_context:
+            try:
+                self.pipeline.close_capture(self.capture_context)
+            except Exception:
+                pass
+        self.capture_context = None
+        self.session_runner = None
+
+    def _ensure_pipeline(self) -> AttendancePipeline:
+        pipeline = self.pipeline
+        if pipeline is None:
+            args = self.config.to_pipeline_args()
+            pipeline = AttendancePipeline(args)
+            self.pipeline = pipeline
+        return pipeline
+
+    def shutdown(self) -> None:
+        self.stop()
+        self.pipeline = None
+
 
 class StatusPanel(ttk.Frame):
     def __init__(self, master: tk.Misc) -> None:
@@ -449,6 +473,7 @@ class AttendanceLogBook:
         self.max_entries = max_entries
         self.pages: list[dict[str, object]] = []
         self.selected_page_id: Optional[str] = None
+        self._entry_cache: dict[str, list[dict[str, object]]] = {}
         self._load()
 
     # ------------------------------------------------------------------ persistence
@@ -475,10 +500,19 @@ class AttendanceLogBook:
             self.selected_page_id = None
 
     def _save(self) -> None:
+        pages_payload: list[dict[str, object]] = []
+        for page in self.pages:
+            page_id = page["id"]
+            entries = self._entry_cache.get(page_id)
+            if entries is None:
+                entries = self._load_entries_from_disk(page_id)
+            payload_page = dict(page)
+            payload_page["entries"] = entries[: self.max_entries] if entries else []
+            pages_payload.append(payload_page)
         payload = {
             "version": 1,
             "selected_page_id": self.selected_page_id,
-            "pages": self.pages,
+            "pages": pages_payload,
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -493,17 +527,13 @@ class AttendanceLogBook:
     def _normalize_page(self, raw: dict[str, object]) -> dict[str, object]:
         created = str(raw.get("created_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"))
         entries_raw = raw.get("entries")
-        entries: list[dict[str, object]] = []
-        if isinstance(entries_raw, list):
-            for entry in entries_raw:
-                if isinstance(entry, dict):
-                    entries.append(self._normalize_entry(entry))
+        entry_count = len(entries_raw) if isinstance(entries_raw, list) else 0
         return {
             "id": str(raw.get("id") or uuid4().hex),
             "name": str(raw.get("name") or "Session"),
             "created_at": created,
             "updated_at": str(raw.get("updated_at") or created),
-            "entries": entries[: self.max_entries],
+            "entry_count": entry_count,
         }
 
     def _normalize_entry(self, entry: dict[str, object]) -> dict[str, object]:
@@ -530,11 +560,13 @@ class AttendanceLogBook:
                 return page
         return None
 
-    def entries_for(self, page_id: Optional[str]) -> list[dict[str, object]]:
-        page = self.get_page(page_id)
-        if page is None:
+    def entries_for(self, page_id: Optional[str], *, limit: Optional[int] = None) -> list[dict[str, object]]:
+        if not page_id:
             return []
-        return list(page["entries"])
+        entries = self._get_cached_entries(page_id)
+        if limit is not None:
+            return list(entries[:limit])
+        return list(entries)
 
     def page_index(self, page_id: Optional[str]) -> int:
         if not page_id:
@@ -551,10 +583,11 @@ class AttendanceLogBook:
             "name": name or "Session",
             "created_at": timestamp,
             "updated_at": timestamp,
-            "entries": [],
+            "entry_count": 0,
         }
         self.pages.append(page)
         self.selected_page_id = page["id"]
+        self._entry_cache[page["id"]] = []
         self._save()
         return page
 
@@ -571,10 +604,12 @@ class AttendanceLogBook:
         if page is None:
             return None
         normalized = self._normalize_entry(entry)
-        page["entries"].insert(0, normalized)
-        if len(page["entries"]) > self.max_entries:
-            page["entries"] = page["entries"][: self.max_entries]
+        entries = self._get_cached_entries(page_id)
+        entries.insert(0, normalized)
+        if len(entries) > self.max_entries:
+            del entries[self.max_entries :]
         page["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        page["entry_count"] = len(entries)
         self._save()
         return normalized
 
@@ -589,6 +624,7 @@ class AttendanceLogBook:
             return
         if self.selected_page_id == page_id:
             self.selected_page_id = self.pages[0]["id"] if self.pages else None
+        self._entry_cache.pop(page_id, None)
         self._save()
 
     def set_selected_page(self, page_id: Optional[str]) -> None:
@@ -600,6 +636,45 @@ class AttendanceLogBook:
             return
         self.selected_page_id = page_id
         self._save()
+
+    def release_entries(self, *, keep: Optional[set[str]] = None) -> None:
+        if keep is None:
+            self._entry_cache.clear()
+            return
+        for key in list(self._entry_cache):
+            if key not in keep:
+                self._entry_cache.pop(key, None)
+
+    def _get_cached_entries(self, page_id: str) -> list[dict[str, object]]:
+        if not self.get_page(page_id):
+            return []
+        cache = self._entry_cache.get(page_id)
+        if cache is None:
+            cache = self._load_entries_from_disk(page_id)
+            self._entry_cache[page_id] = cache
+        return cache
+
+    def _load_entries_from_disk(self, page_id: str) -> list[dict[str, object]]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return []
+        raw_pages = payload.get("pages")
+        if not isinstance(raw_pages, list):
+            return []
+        for page in raw_pages:
+            if not isinstance(page, dict):
+                continue
+            if str(page.get("id")) != page_id:
+                continue
+            entries_raw = page.get("entries")
+            normalized: list[dict[str, object]] = []
+            if isinstance(entries_raw, list):
+                for entry in entries_raw[: self.max_entries]:
+                    if isinstance(entry, dict):
+                        normalized.append(self._normalize_entry(entry))
+            return normalized
+        return []
 
 
 class AttendanceLog(ttk.Frame):
@@ -646,8 +721,12 @@ class AttendanceLog(ttk.Frame):
 
     def load_entries(self, entries: Iterable[dict[str, object]]) -> None:
         self.clear()
-        buffered = list(entries)
-        for entry in reversed(buffered):
+        sequence: Sequence[dict[str, object]]
+        if isinstance(entries, Sequence):
+            sequence = entries
+        else:
+            sequence = list(entries)
+        for entry in reversed(sequence):
             self.add_entry(
                 timestamp=str(entry.get("timestamp", "")),
                 identity=str(entry.get("identity", "")),
@@ -940,7 +1019,7 @@ class ControlPanel(ttk.Frame):
             SETTINGS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             messagebox.showinfo("Settings saved", f"Settings stored in {SETTINGS_PATH.resolve()}", parent=self)
         except OSError as exc:
-            messagebox.showerror("Save failed", f"Unable to save settings: {exc}", parent=self)
+            _show_error_dialog("Save failed", f"Unable to save settings: {exc}", parent=self)
 
     def build_demo_config(self) -> Optional[DemoConfig]:
         try:
@@ -954,7 +1033,7 @@ class ControlPanel(ttk.Frame):
             eval_duration = float(self.eval_duration_var.get() or "0.9")
             eval_frames = int(float(self.eval_frames_var.get() or "30"))
         except ValueError as exc:
-            messagebox.showerror("Invalid settings", f"Numeric format error: {exc}", parent=self)
+            _show_error_dialog("Invalid settings", f"Numeric format error: {exc}", parent=self)
             return None
         box_size = max(0, box_size)
         center_tol = max(0.0, center_tol)
@@ -1018,6 +1097,8 @@ class FacebankPanel(ttk.Frame):
         self._active_identity: Optional[str] = None
         self._thumb_labels: dict[Path, tk.Label] = {}
         self._selected_samples: set[Path] = set()
+        self._busy = False
+        self._busy_message = "Facebank is refreshing, please wait for it to finish."
 
         header = ttk.Frame(self)
         header.grid(row=0, column=0, sticky="ew", padx=UI_PAD, pady=(UI_PAD, UI_PAD // 2))
@@ -1076,9 +1157,12 @@ class FacebankPanel(ttk.Frame):
         footer.columnconfigure(0, weight=1)
         button_row = ttk.Frame(footer)
         button_row.pack(side="left")
-        ttk.Button(button_row, text="Register User", command=self.on_register, width=18).grid(row=0, column=0, padx=4)
-        ttk.Button(button_row, text="Rename User", command=self._rename_selected, width=18).grid(row=0, column=1, padx=4)
-        ttk.Button(button_row, text="Delete User", command=self._delete_selected, width=18).grid(row=0, column=2, padx=4)
+        self.register_button = ttk.Button(button_row, text="Register User", command=self.on_register, width=18)
+        self.register_button.grid(row=0, column=0, padx=4)
+        self.rename_button = ttk.Button(button_row, text="Rename User", command=self._rename_selected, width=18)
+        self.rename_button.grid(row=0, column=1, padx=4)
+        self.delete_button = ttk.Button(button_row, text="Delete User", command=self._delete_selected, width=18)
+        self.delete_button.grid(row=0, column=2, padx=4)
         samples_row = ttk.Frame(footer)
         samples_row.pack(side="right")
         self.delete_samples_button = ttk.Button(
@@ -1092,13 +1176,51 @@ class FacebankPanel(ttk.Frame):
 
         self.refresh()
 
+    def set_busy(self, busy: bool, message: Optional[str] = None) -> None:
+        self._busy = busy
+        if busy and message:
+            self._busy_message = message
+        elif not busy:
+            self._busy_message = "Facebank is refreshing, please wait for it to finish."
+        for button in (
+            getattr(self, "register_button", None),
+            getattr(self, "rename_button", None),
+            getattr(self, "delete_button", None),
+            getattr(self, "delete_samples_button", None),
+            getattr(self, "clear_selection_button", None),
+        ):
+            if button is None:
+                continue
+            if busy:
+                button.state(["disabled"])
+            else:
+                button.state(["!disabled"])
+        self._update_sample_action_state()
+        try:
+            self.listbox.configure(state="disabled" if busy else "normal")
+        except tk.TclError:
+            pass
+
+    def _ensure_ready(self) -> bool:
+        if not self._busy:
+            return True
+        messagebox.showinfo("Facebank busy", self._busy_message, parent=self)
+        return False
+
     def refresh(self) -> None:
         names: List[str] = []
         DEFAULT_FACEBANK.mkdir(parents=True, exist_ok=True)
-        if DEFAULT_FACEBANK.exists():
-            for entry in sorted(DEFAULT_FACEBANK.iterdir()):
+        try:
+            entries = sorted(DEFAULT_FACEBANK.iterdir())
+        except OSError as exc:
+            _show_error_dialog("Facebank access error", f"Unable to read facebank directory: {exc}", parent=self)
+            entries = []
+        for entry in entries:
+            try:
                 if entry.is_dir() and not entry.name.startswith("."):
                     names.append(entry.name)
+            except OSError:
+                continue
         self.listbox.delete(0, tk.END)
         for name in names:
             self.listbox.insert(tk.END, name)
@@ -1210,14 +1332,16 @@ class FacebankPanel(ttk.Frame):
         self._update_sample_action_state()
 
     def _update_sample_action_state(self) -> None:
-        if self._selected_samples:
-            self.delete_samples_button.state(("!disabled",))
-            self.clear_selection_button.state(("!disabled",))
-        else:
+        if self._busy or not self._selected_samples:
             self.delete_samples_button.state(("disabled",))
             self.clear_selection_button.state(("disabled",))
+            return
+        self.delete_samples_button.state(("!disabled",))
+        self.clear_selection_button.state(("!disabled",))
 
     def _delete_selected_samples(self) -> None:
+        if not self._ensure_ready():
+            return
         if not self._selected_samples:
             messagebox.showinfo("Delete samples", "Select at least one sample.", parent=self)
             return
@@ -1236,7 +1360,7 @@ class FacebankPanel(ttk.Frame):
             except OSError as exc:
                 errors.append(f"{Path(path).name}: {exc}")
         if errors:
-            messagebox.showerror("Delete samples", "\n".join(errors), parent=self)
+            _show_error_dialog("Delete samples", "\n".join(errors), parent=self)
         self._selected_samples.clear()
         self._load_thumbnails()
         self._request_refresh(
@@ -1245,6 +1369,8 @@ class FacebankPanel(ttk.Frame):
         )
 
     def _rename_selected(self) -> None:
+        if not self._ensure_ready():
+            return
         names = self._selected_names()
         if len(names) != 1:
             messagebox.showinfo("Rename identity", "Select a single identity to rename.", parent=self)
@@ -1255,19 +1381,19 @@ class FacebankPanel(ttk.Frame):
             return
         sanitized = _sanitize_identity_name(new_name)
         if not sanitized:
-            messagebox.showerror("Rename identity", "Name cannot be empty.", parent=self)
+            _show_error_dialog("Rename identity", "Name cannot be empty.", parent=self)
             return
         if sanitized == current:
             return
         src = DEFAULT_FACEBANK / current
         dst = DEFAULT_FACEBANK / sanitized
         if dst.exists():
-            messagebox.showerror("Rename identity", f"'{sanitized}' already exists.", parent=self)
+            _show_error_dialog("Rename identity", f"'{sanitized}' already exists.", parent=self)
             return
         try:
             src.rename(dst)
         except OSError as exc:
-            messagebox.showerror("Rename identity", f"Unable to rename: {exc}", parent=self)
+            _show_error_dialog("Rename identity", f"Unable to rename: {exc}", parent=self)
             return
         self.refresh()
         self._request_refresh(
@@ -1276,6 +1402,8 @@ class FacebankPanel(ttk.Frame):
         )
 
     def _delete_selected(self) -> None:
+        if not self._ensure_ready():
+            return
         names = self._selected_names()
         if not names:
             messagebox.showinfo("Delete identity", "Select at least one identity to delete.", parent=self)
@@ -1415,6 +1543,12 @@ class DashboardApp:
         self._current_log_id: Optional[str] = None
         self._active_log_id: Optional[str] = None
         self._next_session_log_id: Optional[str] = None
+        self._cleanup_done = False
+        self._facebank_refresh_lock = threading.Lock()
+        self._facebank_refresh_active = False
+        self._pending_facebank_refresh: Optional[tuple[DemoConfig, str, str]] = None
+        self._facebank_locked = False
+        atexit.register(self._cleanup_resources)
 
         self.status_panel = StatusPanel(self.root)
         self.status_panel.pack(fill="x", padx=12, pady=(12, 6))
@@ -1597,6 +1731,8 @@ class DashboardApp:
             self.log_panel.load_entries(entries)
         self.log_title_var.set(self._format_log_label())
         self._update_log_nav_state()
+        keep_ids = {pid for pid in (self._current_log_id, self._active_log_id) if pid}
+        self.log_book.release_entries(keep=keep_ids or None)
 
     def _format_log_label(self) -> str:
         pages = self.log_book.list_pages()
@@ -1638,7 +1774,7 @@ class DashboardApp:
         dialog.columnconfigure(0, weight=1)
         dialog.rowconfigure(1, weight=1)
         for idx, page in enumerate(pages):
-            entry_count = len(page.get("entries", []))
+            entry_count = int(page.get("entry_count") or 0)
             created = page.get("created_at", "")[:16]
             label = f"{page['name']}  ({entry_count} entries, {created})"
             listbox.insert("end", label)
@@ -1756,6 +1892,9 @@ class DashboardApp:
         self.status_panel.set_status(f"Renamed log to '{final_name}'.")
 
     def _resume_session_from_log(self) -> None:
+        if self._session_active:
+            messagebox.showinfo("Resume session", "Stop the current session before resuming another log.", parent=self.root)
+            return
         pages = self.log_book.list_pages()
         if not pages:
             messagebox.showinfo("Resume session", "No logs available to resume.", parent=self.root)
@@ -1766,7 +1905,7 @@ class DashboardApp:
             return
         page = self.log_book.get_page(selection)
         if page is None:
-            messagebox.showerror("Resume session", "Unable to load the selected log.", parent=self.root)
+            _show_error_dialog("Resume session", "Unable to load the selected log.", parent=self.root)
             return
         if self._session_active and self._active_log_id == page["id"]:
             messagebox.showinfo("Resume session", f"'{page['name']}' is already live.", parent=self.root)
@@ -1853,10 +1992,13 @@ class DashboardApp:
         self.status_panel.set_status(f"Deleted log '{page['name']}'.")
 
     def _start_session_from_controls(self) -> None:
+        if self._facebank_locked:
+            messagebox.showinfo("Facebank busy", "Facebank is refreshing; wait until it completes before starting a session.", parent=self.root)
+            return
         if self.registration_session is not None:
             messagebox.showinfo("Registration active", "Finish or cancel registration before starting a session.", parent=self.root)
             return
-        if self.controller is not None:
+        if self._session_active:
             return
         config = self.control_panel.build_demo_config()
         if config is None:
@@ -1865,21 +2007,31 @@ class DashboardApp:
         try:
             select_device(config.device)
         except Exception as exc:
-            messagebox.showerror("Device error", str(exc), parent=self.root)
+            _show_error_dialog("Device error", str(exc), parent=self.root)
             return
         if not self._prepare_log_for_new_session():
             return
         self._start_session(config)
 
     def _start_session(self, config: DemoConfig) -> None:
-        self._stop_session(preserve_active_log=True)
-        self.controller = AttendanceSessionController(config)
+        self._stop_session(preserve_active_log=True, dispose=False)
+        controller = self.controller
+        if controller is None:
+            controller = AttendanceSessionController(config)
+            self.controller = controller
+        elif controller.config != config:
+            controller.shutdown()
+            controller = AttendanceSessionController(config)
+            self.controller = controller
+        else:
+            controller.config = config
         self._show_metrics_overlay = config.show_metrics
         self._display_scores = config.display_scores
         self._seed_session_identities()
         self._next_person_event = threading.Event()
         self._awaiting_next = False
         self._session_active = True
+        self._update_facebank_panel_busy_state()
         self._set_start_button_mode("disabled")
         self.pause_button.state(["!disabled"])
         self._show_session_controls()
@@ -1895,17 +2047,36 @@ class DashboardApp:
             on_metrics=self._handle_metrics,
         )
         try:
-            self.controller.start(callbacks, on_error=self._handle_session_error)
+            controller.start(callbacks, on_error=self._handle_session_error)
             self.status_panel.set_status("Align face to begin verification.")
         except Exception as exc:
-            self._stop_session()
-            messagebox.showerror("Session error", _format_exception(exc), parent=self.root)
+            self._stop_session(dispose=True)
+            _show_error_dialog("Session error", _format_exception(exc), parent=self.root)
 
-    def _stop_session(self, *, preserve_active_log: bool = False) -> None:
+    def _shutdown_controller(self) -> None:
+        controller = self.controller
+        if controller is None:
+            return
+        self.controller = None
+        try:
+            controller.shutdown()
+        except Exception as exc:
+            print(f"[Dashboard] Warning: Failed to stop session controller: {exc}")
+
+    def _stop_session(self, *, preserve_active_log: bool = False, dispose: bool = False) -> None:
         retained_log = self._active_log_id if preserve_active_log else None
-        if self.controller is not None:
-            self.controller.stop()
-            self.controller = None
+        controller = self.controller
+        if controller is not None:
+            try:
+                if dispose:
+                    controller.shutdown()
+                    self.controller = None
+                else:
+                    controller.stop()
+            except Exception as exc:
+                print(f"[Dashboard] Warning: Failed to stop session controller: {exc}")
+                if dispose:
+                    self.controller = None
         self._session_active = False
         self._active_log_id = retained_log
         self._awaiting_next = False
@@ -1915,16 +2086,19 @@ class DashboardApp:
         self.status_panel.set_status("Session stopped.")
         self.pause_button.state(["disabled"])
         self._set_start_button_mode("start")
-        self._latest_metrics = {}
+        self._clear_metrics_overlay()
         self._session_identities.clear()
+        self._update_facebank_panel_busy_state()
+        keep_ids = {pid for pid in (self._current_log_id, self._active_log_id) if pid}
+        self.log_book.release_entries(keep=keep_ids or None)
 
     def _handle_session_error(self, exc: BaseException) -> None:
         self.root.after(0, lambda: self._report_session_error(exc))
 
     def _report_session_error(self, exc: BaseException) -> None:
-        self._stop_session()
+        self._stop_session(dispose=True)
         self.status_panel.set_status("Session ended due to an error.")
-        messagebox.showerror("Session error", _format_exception(exc), parent=self.root)
+        _show_error_dialog("Session error", _format_exception(exc), parent=self.root)
 
     def _wait_for_next(self) -> bool:
         self._awaiting_next = True
@@ -1987,6 +2161,9 @@ class DashboardApp:
     def _handle_metrics(self, metrics: Dict[str, float]) -> None:
         self._latest_metrics = metrics
 
+    def _clear_metrics_overlay(self) -> None:
+        self._latest_metrics = {}
+
     def _submit_frame(self, frame: np.ndarray) -> None:
         if self.registration_session is not None:
             self.video_display.submit(frame)
@@ -2001,6 +2178,7 @@ class DashboardApp:
             return
         self._set_start_button_mode("disabled")
         self._awaiting_next = False
+        self._clear_metrics_overlay()
         self._next_person_event.set()
 
     def _start_registration(self) -> None:
@@ -2016,7 +2194,7 @@ class DashboardApp:
             session = RegistrationSession(config, self._submit_frame)
             session.start()
         except Exception as exc:
-            messagebox.showerror("Registration", f"Unable to start registration: {exc}", parent=self.root)
+            _show_error_dialog("Registration", f"Unable to start registration: {exc}", parent=self.root)
             return
         self.registration_session = session
         self.registration_name_var.set("")
@@ -2031,7 +2209,7 @@ class DashboardApp:
         try:
             count = session.capture_sample()
         except RuntimeError as exc:
-            messagebox.showerror("Capture sample", str(exc), parent=self.root)
+            _show_error_dialog("Capture sample", str(exc), parent=self.root)
             return
         self.registration_status_var.set(f"Captured {count} sample(s).")
 
@@ -2045,7 +2223,7 @@ class DashboardApp:
             return
         sanitized = _sanitize_identity_name(identity_raw)
         if not sanitized:
-            messagebox.showerror("Registration", "Identity name is invalid.", parent=self.root)
+            _show_error_dialog("Registration", "Identity name is invalid.", parent=self.root)
             return
         if session.sample_count == 0:
             messagebox.showinfo("Registration", "Capture at least one sample before saving.", parent=self.root)
@@ -2062,7 +2240,7 @@ class DashboardApp:
         try:
             saved = session.save_samples(sanitized)
         except RuntimeError as exc:
-            messagebox.showerror("Registration", str(exc), parent=self.root)
+            _show_error_dialog("Registration", str(exc), parent=self.root)
             return
         self.registration_status_var.set(f"Saved {saved} samples for {sanitized}.")
         messagebox.showinfo("Registration complete", f"Saved {saved} samples for {sanitized}.", parent=self.root)
@@ -2080,9 +2258,7 @@ class DashboardApp:
         self._end_registration(message="Registration cancelled.")
 
     def _end_registration(self, message: Optional[str] = None) -> None:
-        if self.registration_session is not None:
-            self.registration_session.stop()
-            self.registration_session = None
+        self._shutdown_registration_session()
         if message:
             self.registration_status_var.set(message)
         else:
@@ -2119,20 +2295,36 @@ class DashboardApp:
         )
 
     def _ui_call(self, func, *args, **kwargs) -> None:
-        if func is None:
+        if func is None or self.root is None:
             return
-        self.root.after(0, lambda f=func, a=args, kw=kwargs: f(*a, **kw))
+        try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
+            self.root.after(0, lambda f=func, a=args, kw=kwargs: f(*a, **kw))
+        except tk.TclError:
+            pass
 
     def _set_start_button_mode(self, mode: str) -> None:
         self._session_button_mode = mode
+        locked = self._facebank_locked and not self._session_active
         if mode == "start":
             self.start_button.config(text="Start Session", command=self._start_session_from_controls)
-            self.start_button.state(["!disabled"])
+            self.start_button.state(["disabled"] if locked else ["!disabled"])
         elif mode == "next":
             self.start_button.config(text="Next Person", command=self._signal_next_person)
             self.start_button.state(["!disabled"])
         elif mode == "disabled":
             self.start_button.state(["disabled"])
+        self._update_resume_button_state()
+
+    def _update_resume_button_state(self) -> None:
+        if self._facebank_locked or self._session_active:
+            self.resume_button.state(["disabled"])
+        else:
+            self.resume_button.state(["!disabled"])
 
     def _show_session_controls(self) -> None:
         self.registration_frame.grid_remove()
@@ -2199,7 +2391,7 @@ class DashboardApp:
                     writer.writerow(row_values)
             messagebox.showinfo("Export attendance", f"CSV for '{page['name']}' written to {export_path}", parent=self.root)
         except Exception as exc:
-            messagebox.showerror("Export failed", f"Unable to export log: {exc}", parent=self.root)
+            _show_error_dialog("Export failed", f"Unable to export log: {exc}", parent=self.root)
 
     def _refresh_facebank(self) -> None:
         if getattr(self, "facebank_panel", None) is not None:
@@ -2215,8 +2407,20 @@ class DashboardApp:
         if config is None:
             self.notebook.select(self.settings_tab)
             return
-        self.status_panel.set_status(status_message or "Refreshing facebank...")
-        self._rebuild_facebank_async(config, success_message=success_message or "Facebank refreshed.")
+        final_status = status_message or "Refreshing facebank..."
+        final_success = success_message or "Facebank refreshed."
+        self._schedule_facebank_refresh(config, status_message=final_status, success_message=final_success)
+
+    def _schedule_facebank_refresh(self, config: DemoConfig, *, status_message: str, success_message: str) -> None:
+        with self._facebank_refresh_lock:
+            if self._facebank_refresh_active:
+                self._pending_facebank_refresh = (config, status_message, success_message)
+                self.status_panel.set_status("Facebank refresh running; queuing another update.")
+                return
+            self._facebank_refresh_active = True
+        self._set_facebank_busy(True)
+        self.status_panel.set_status(status_message)
+        self._rebuild_facebank_async(config, success_message=success_message)
 
     def _rebuild_facebank_async(self, config: DemoConfig, *, success_message: str = "Facebank refreshed.") -> None:
         def worker() -> None:
@@ -2248,30 +2452,90 @@ class DashboardApp:
                     else:
                         self._facebank_refresh_complete(success_message)
 
-                self.root.after(0, notify)
+                self._ui_call(notify)
             except Exception as exc:
                 err = _format_exception(exc)
-                self.root.after(
-                    0,
-                    lambda: messagebox.showerror(
+                self._ui_call(
+                    lambda: _show_error_dialog(
                         "Facebank refresh failed",
                         err,
                         parent=self.root,
-                    ),
+                    )
                 )
+            finally:
+                self._handle_facebank_refresh_finished()
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_facebank_refresh_finished(self) -> None:
+        pending: Optional[tuple[DemoConfig, str, str]] = None
+        with self._facebank_refresh_lock:
+            self._facebank_refresh_active = False
+            pending = self._pending_facebank_refresh
+            self._pending_facebank_refresh = None
+        if pending:
+            config, status_message, success_message = pending
+            self._ui_call(
+                lambda: self._schedule_facebank_refresh(
+                    config,
+                    status_message=status_message,
+                    success_message=success_message,
+                )
+            )
+            return
+        self._ui_call(lambda: self._set_facebank_busy(False))
+
+    def _set_facebank_busy(self, busy: bool) -> None:
+        self._facebank_locked = busy
+        self._update_facebank_panel_busy_state()
+        if not self._session_active:
+            self._set_start_button_mode(self._session_button_mode)
+        self._update_resume_button_state()
+
+    def _update_facebank_panel_busy_state(self) -> None:
+        panel = getattr(self, "facebank_panel", None)
+        if panel is None:
+            return
+        if self._facebank_refresh_active:
+            panel.set_busy(True, message="Facebank is refreshing, please wait for it to finish.")
+        elif self._session_active:
+            panel.set_busy(True, message="Facebank editing is disabled while a session is running.")
+        else:
+            panel.set_busy(False)
 
     def _facebank_refresh_complete(self, message: str) -> None:
         self.status_panel.set_status(message)
         self._refresh_facebank()
 
     def _on_close(self) -> None:
-        self._stop_session()
+        self._stop_session(dispose=True)
         if self.registration_session is not None:
             self._end_registration()
-        self.video_display.stop()
+        self._cleanup_resources()
         self.root.destroy()
+
+    def _shutdown_registration_session(self) -> None:
+        session = self.registration_session
+        if session is None:
+            return
+        self.registration_session = None
+        try:
+            session.stop()
+        except Exception as exc:
+            print(f"[Dashboard] Warning: Failed to stop registration session: {exc}")
+
+    def _cleanup_resources(self) -> None:
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+        self._shutdown_controller()
+        self._shutdown_registration_session()
+        display = getattr(self, "video_display", None)
+        if display is not None:
+            try:
+                display.stop()
+            except Exception:
+                pass
 
 
 def main() -> None:
