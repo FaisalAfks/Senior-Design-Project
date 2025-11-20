@@ -51,7 +51,7 @@ class LogbookPanel(ttk.Frame):
         body.grid(row=1, column=0, sticky="nsew", padx=pad, pady=(0, half_pad))
         body.columnconfigure(0, weight=1)
         body.rowconfigure(0, weight=1)
-        self._log_view = AttendanceLog(body)
+        self._log_view = AttendanceLog(body, theme=theme)
         self._log_view.grid(row=0, column=0, sticky="nsew")
 
         footer = ttk.Frame(self)

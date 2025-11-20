@@ -45,6 +45,7 @@ class SessionRunner:
         verification_display_callback: Optional[Callable[[np.ndarray], None]] = None,
         poll_cancel_callback: Optional[Callable[[], bool]] = None,
         wait_for_next_callback: Optional[Callable[[], bool]] = None,
+        blocked_identity_checker: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.capture = capture
         self.detector = detector
@@ -64,6 +65,7 @@ class SessionRunner:
         self._wait_for_next_callback = wait_for_next_callback
         self._guidance_box: Optional[GuidanceBox] = None
         self._guidance_padding = float(getattr(args, "guidance_crop_padding", 0.2))
+        self._blocked_identity_checker = blocked_identity_checker
 
     def run_cycle(
         self,
@@ -111,6 +113,7 @@ class SessionRunner:
             collect_timings=True,
             guidance_box=self._guidance_box,
             guidance_padding=self._guidance_padding,
+            blocked_identity_checker=self._blocked_identity_checker,
         )
         return SessionCycle(observations=observations, last_frame=last_frame, duration=duration, metrics=metrics)
 

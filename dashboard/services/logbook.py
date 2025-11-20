@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ class AttendanceLogBook:
         self.pages: list[dict[str, object]] = []
         self.selected_page_id: Optional[str] = None
         self._entry_cache: dict[str, list[dict[str, object]]] = {}
+        self._rejection_cache: dict[str, dict[str, dict[str, object]]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -26,20 +28,27 @@ class AttendanceLogBook:
         except (OSError, json.JSONDecodeError):
             payload = {}
         raw_pages = payload.get("pages") if isinstance(payload, dict) else []
-        normalized: list[dict[str, object]] = []
+        normalized_pages: list[dict[str, object]] = []
         if isinstance(raw_pages, list):
             for page in raw_pages:
                 if isinstance(page, dict):
                     normalized_page = self._normalize_page(page)
-                    normalized.append(normalized_page)
+                    normalized_pages.append(normalized_page)
                     entries = page.get("entries")
+                    page_id = normalized_page["id"]
                     if isinstance(entries, list):
-                        page_id = normalized_page["id"]
                         cached = [
                             self._normalize_entry(entry) for entry in entries[: self.max_entries]
                         ]
                         self._entry_cache[page_id] = cached
-        self.pages = normalized
+                    rejections = page.get("rejections")
+                    if isinstance(rejections, list):
+                        bucket: dict[str, dict[str, object]] = {}
+                        for entry in rejections[: self.max_entries]:
+                            rejection_entry = self._normalize_rejection(entry)
+                            bucket[self._rejection_key(rejection_entry["identity"], rejection_entry["source"])] = rejection_entry
+                        self._rejection_cache[page_id] = bucket
+        self.pages = normalized_pages
         selected = payload.get("selected_page_id") if isinstance(payload, dict) else None
         if selected and self.get_page(selected):
             self.selected_page_id = selected
@@ -55,8 +64,12 @@ class AttendanceLogBook:
             entries = self._entry_cache.get(page_id)
             if entries is None:
                 entries = self._load_entries_from_disk(page_id)
+            rejection_bucket = self._rejection_cache.get(page_id)
+            if rejection_bucket is None:
+                rejection_bucket = self._load_rejections_from_disk(page_id)
             payload_page = dict(page)
             payload_page["entries"] = entries[: self.max_entries] if entries else []
+            payload_page["rejections"] = self._ordered_rejections(rejection_bucket)[: self.max_entries]
             pages_payload.append(payload_page)
         payload = {
             "version": 1,
@@ -91,6 +104,27 @@ class AttendanceLogBook:
         normalized["source"] = str(entry.get("source") or "")
         return normalized
 
+    def _normalize_rejection(self, entry: dict[str, object]) -> dict[str, object]:
+        normalized = self._normalize_entry(entry)
+        normalized["accepted"] = False
+        return normalized
+
+    def _rejection_key(self, identity: str, source: str) -> str:
+        identity = str(identity or "")
+        source = str(source or "")
+        if identity and identity != "Unknown":
+            return identity
+        return f"{identity}::{source}"
+
+    def _ordered_rejections(self, bucket: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+        if not bucket:
+            return []
+        return sorted(
+            bucket.values(),
+            key=lambda entry: str(entry.get("timestamp", "")),
+            reverse=True,
+        )
+
     @property
     def is_empty(self) -> bool:
         return not self.pages
@@ -113,6 +147,65 @@ class AttendanceLogBook:
         if limit is not None:
             return list(entries[:limit])
         return list(entries)
+
+    def rejections_for(self, page_id: Optional[str]) -> list[dict[str, object]]:
+        if not page_id:
+            return []
+        bucket = self._get_cached_rejections(page_id)
+        return self._ordered_rejections(bucket)
+
+    def combined_entries(self, page_id: Optional[str]) -> list[dict[str, object]]:
+        if not page_id:
+            return []
+        accepted_entries = self.entries_for(page_id)
+        rejections = self.rejections_for(page_id)
+        accepted_ids = {
+            str(entry.get("identity"))
+            for entry in accepted_entries
+            if entry.get("accepted") and str(entry.get("identity", "")).strip() and str(entry.get("identity")) != "Unknown"
+        }
+        if accepted_ids:
+            filtered_rejections: list[dict[str, object]] = []
+            for entry in rejections:
+                identity = str(entry.get("identity", ""))
+                source = str(entry.get("source", ""))
+                if identity and identity in accepted_ids:
+                    self.remove_rejection(page_id, identity, source)
+                    continue
+                filtered_rejections.append(entry)
+            rejections = filtered_rejections
+        combined = accepted_entries + rejections
+        combined.sort(key=lambda entry: str(entry.get("timestamp", "")), reverse=True)
+        return combined
+
+    def export_page_to_csv(
+        self,
+        page_id: Optional[str],
+        export_path: Path,
+        *,
+        detail_fields: Iterable[str],
+    ) -> bool:
+        entries = self.combined_entries(page_id)
+        if not entries:
+            return False
+        detail_fields = tuple(detail_fields)
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        header = ["timestamp", "identity", "result", "source", *detail_fields]
+        with export_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(header)
+            ordered = sorted(entries, key=lambda entry: str(entry.get("timestamp", "")))
+            for entry in ordered:
+                row = [
+                    entry.get("timestamp", ""),
+                    entry.get("identity", ""),
+                    "Accepted" if entry.get("accepted") else "Rejected",
+                    entry.get("source", ""),
+                ]
+                for field in detail_fields:
+                    row.append(entry.get(field, ""))
+                writer.writerow(row)
+        return True
 
     def page_index(self, page_id: Optional[str]) -> int:
         if not page_id:
@@ -167,10 +260,42 @@ class AttendanceLogBook:
             page["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self._save()
 
+    def upsert_rejection(self, page_id: str, entry: dict[str, object]) -> None:
+        normalized = self._normalize_rejection(entry)
+        bucket = self._get_cached_rejections(page_id)
+        key = self._rejection_key(normalized["identity"], normalized["source"])
+        bucket[key] = normalized
+        page = self.get_page(page_id)
+        if page:
+            page["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._save()
+
+    def remove_rejection(self, page_id: str, identity: str, source: str) -> bool:
+        bucket = self._get_cached_rejections(page_id)
+        key = self._rejection_key(identity, source)
+        removed = bucket.pop(key, None) is not None
+        if not removed and identity:
+            for other_key, entry in list(bucket.items()):
+                if entry.get("identity") == identity:
+                    bucket.pop(other_key, None)
+                    removed = True
+                    break
+        if removed:
+            page = self.get_page(page_id)
+            if page:
+                page["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._save()
+        return removed
+
     def _get_cached_entries(self, page_id: str) -> list[dict[str, object]]:
         if page_id not in self._entry_cache:
             self._entry_cache[page_id] = self._load_entries_from_disk(page_id)
         return self._entry_cache[page_id]
+
+    def _get_cached_rejections(self, page_id: str) -> dict[str, dict[str, object]]:
+        if page_id not in self._rejection_cache:
+            self._rejection_cache[page_id] = self._load_rejections_from_disk(page_id)
+        return self._rejection_cache[page_id]
 
     def _load_entries_from_disk(self, page_id: str) -> list[dict[str, object]]:
         try:
@@ -193,6 +318,30 @@ class AttendanceLogBook:
                     ]
         return []
 
+    def _load_rejections_from_disk(self, page_id: str) -> dict[str, dict[str, object]]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {}
+        pages = payload.get("pages") if isinstance(payload, dict) else []
+        if isinstance(pages, list):
+            for page in pages:
+                if not isinstance(page, dict):
+                    continue
+                if str(page.get("id")) != page_id:
+                    continue
+                entries = page.get("rejections")
+                if isinstance(entries, list):
+                    bucket: dict[str, dict[str, object]] = {}
+                    for entry in entries[: self.max_entries]:
+                        if not isinstance(entry, dict):
+                            continue
+                        normalized = self._normalize_rejection(entry)
+                        key = self._rejection_key(normalized["identity"], normalized["source"])
+                        bucket[key] = normalized
+                    return bucket
+        return {}
+
     def set_selected_page(self, page_id: Optional[str]) -> None:
         if page_id and self.get_page(page_id):
             self.selected_page_id = page_id
@@ -203,6 +352,9 @@ class AttendanceLogBook:
         for key in list(self._entry_cache.keys()):
             if key not in keep_set:
                 self._entry_cache.pop(key, None)
+        for key in list(self._rejection_cache.keys()):
+            if key not in keep_set:
+                self._rejection_cache.pop(key, None)
 
 
 __all__ = ["AttendanceLogBook"]

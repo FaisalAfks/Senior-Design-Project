@@ -1,2 +1,0 @@
-timestamp,identity,result,source,recognized,avg_identity_score,avg_spoof_score,is_real,accepted,frames_with_detections,capture_duration
-2025-11-15T12:03:41.271008+00:00,Faisal,Accepted,0,True,1.0,0.9462538957595825,True,True,3,1.218539279999277

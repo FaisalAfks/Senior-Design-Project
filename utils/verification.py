@@ -23,6 +23,7 @@ class FaceObservation:
     is_recognized: Optional[bool]
     spoof_score: Optional[float]
     is_real: Optional[bool]
+    blocked: bool = False
 
 
 class FaceEvaluator:
@@ -34,11 +35,13 @@ class FaceEvaluator:
         recogniser: MobileFaceNetService,
         spoof_service: Optional[DeePixBiSService],
         spoof_threshold: float,
+        blocked_identity_checker: Optional[Callable[[str], bool]] = None,
     ) -> None:
         self.detector = detector
         self.recogniser = recogniser
         self.spoof_service = spoof_service
         self.spoof_threshold = float(spoof_threshold)
+        self._blocked_identity_checker = blocked_identity_checker
 
     def evaluate(
         self,
@@ -53,6 +56,7 @@ class FaceEvaluator:
                 self.recogniser,
                 self.spoof_service,
                 self.spoof_threshold,
+                blocked_identity_checker=self._blocked_identity_checker,
             )
         observation = evaluate_frame(
             frame_bgr,
@@ -60,6 +64,7 @@ class FaceEvaluator:
             self.recogniser,
             self.spoof_service,
             self.spoof_threshold,
+            blocked_identity_checker=self._blocked_identity_checker,
         )
         return observation, {}
 
@@ -85,6 +90,8 @@ def evaluate_frame_with_timing(
     recogniser: MobileFaceNetService,
     spoof_service: Optional[DeePixBiSService],
     spoof_threshold: float,
+    *,
+    blocked_identity_checker: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[Optional[FaceObservation], Dict[str, float]]:
     timings: Dict[str, float] = {"detector_ms": 0.0, "recognition_ms": 0.0, "spoof_ms": 0.0}
     t0 = time.perf_counter()
@@ -105,9 +112,19 @@ def evaluate_frame_with_timing(
         return None, timings
     rec: RecognitionResult = rec_results[0]
 
+    blocked = False
+    if blocked_identity_checker and rec.is_recognized and rec.name:
+        try:
+            blocked = bool(blocked_identity_checker(rec.name))
+        except Exception:
+            blocked = False
+
     spoof_score = None
     is_real = None
-    if spoof_service is not None:
+    if blocked:
+        spoof_score = 0.0
+        is_real = False
+    elif spoof_service is not None:
         crop = detector.detector.crop_face(frame_bgr, detection, expand=0.15, output_size=(224, 224))
         if crop is not None:
             t2 = time.perf_counter()
@@ -123,6 +140,7 @@ def evaluate_frame_with_timing(
         is_recognized=rec.is_recognized,
         spoof_score=spoof_score,
         is_real=is_real,
+        blocked=blocked,
     ), timings
 
 
@@ -132,8 +150,17 @@ def evaluate_frame(
     recogniser: MobileFaceNetService,
     spoof_service: Optional[DeePixBiSService],
     spoof_threshold: float,
+    *,
+    blocked_identity_checker: Optional[Callable[[str], bool]] = None,
 ) -> Optional[FaceObservation]:
-    obs, _ = evaluate_frame_with_timing(frame_bgr, detector, recogniser, spoof_service, spoof_threshold)
+    obs, _ = evaluate_frame_with_timing(
+        frame_bgr,
+        detector,
+        recogniser,
+        spoof_service,
+        spoof_threshold,
+        blocked_identity_checker=blocked_identity_checker,
+    )
     return obs
 
 
@@ -150,14 +177,17 @@ def aggregate_observations(
         "avg_spoof_score": None,
         "is_real": None,
         "accepted": False,
+        "blocked": False,
     }
     if not observations:
         return summary
 
     identity_scores: Dict[str, List[float]] = {}
+    blocked_by_identity: Dict[str, bool] = {}
     for obs in observations:
         if obs.is_recognized and obs.identity and obs.identity_score is not None:
             identity_scores.setdefault(obs.identity, []).append(obs.identity_score)
+            blocked_by_identity[obs.identity] = blocked_by_identity.get(obs.identity, False) or bool(obs.blocked)
 
     if identity_scores:
         best_identity = max(identity_scores.items(), key=lambda item: sum(item[1]) / len(item[1]))[0]
@@ -165,6 +195,7 @@ def aggregate_observations(
         summary["recognized"] = True
         summary["identity"] = best_identity
         summary["avg_identity_score"] = sum(scores) / len(scores)
+        summary["blocked"] = blocked_by_identity.get(best_identity, False)
 
     spoof_scores = [obs.spoof_score for obs in observations if obs.spoof_score is not None]
     if spoof_scores:
@@ -378,6 +409,7 @@ def run_verification_phase(
     minimal_mode: bool = False,
     guidance_box: Optional[GuidanceBox] = None,
     guidance_padding: float = 0.2,
+    blocked_identity_checker: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[List[FaceObservation], Optional[np.ndarray], float, Dict[str, float]]:
     observations: List[FaceObservation] = []
     last_frame: Optional[np.ndarray] = None
@@ -385,7 +417,13 @@ def run_verification_phase(
     frame_limit = max(1, int(frame_limit))
     start_time = time.perf_counter()
 
-    evaluator = FaceEvaluator(detector, recogniser, spoof_service, spoof_threshold)
+    evaluator = FaceEvaluator(
+        detector,
+        recogniser,
+        spoof_service,
+        spoof_threshold,
+        blocked_identity_checker=blocked_identity_checker,
+    )
     processed_frames = 0
     timing_sums = {"detector_ms": 0.0, "recognition_ms": 0.0, "spoof_ms": 0.0}
     timing_count = 0

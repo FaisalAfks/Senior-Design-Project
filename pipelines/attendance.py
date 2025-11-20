@@ -23,6 +23,7 @@ from utils.resolution import build_resizer, parse_max_size
 from utils.services import create_services, warmup_services
 from utils.session import SessionRunner
 from utils.verification import FaceEvaluator, aggregate_observations, compose_direct_display, compose_final_display
+from utils.overlay import PanelStyle, BannerStyle, draw_text_panel, draw_center_banner
 
 
 DEFAULT_WEIGHTS = ROOT / "MobileFaceNet" / "Weights" / "MobileFace_Net"
@@ -42,6 +43,26 @@ MOBILEFACENET_INPUT = 112
 DEEPIX_TARGET_SIZE = 224
 GUIDANCE_MIN_SIDE = max(BLAZEFACE_MIN_FACE, MOBILEFACENET_INPUT, DEEPIX_TARGET_SIZE)
 _WINDOW_READY: set[str] = set()
+
+DIRECT_METRICS_PANEL = PanelStyle(
+    bg_color=(18, 20, 25),
+    alpha=0.75,
+    padding=12,
+    margin=20,
+    font_scale=0.6,
+    text_color=(235, 235, 235),
+    title_color=(180, 220, 255),
+    title_scale=0.7,
+    title_thickness=2,
+)
+DIRECT_INSTRUCTION_BANNER = BannerStyle(
+    bg_color=(0, 0, 0),
+    text_color=(200, 200, 200),
+    alpha=0.65,
+    padding=12,
+    margin=24,
+    font_scale=0.7,
+)
 
 
 def _window_closed(window_name: str) -> bool:
@@ -111,6 +132,7 @@ class AttendancePipeline:
         window_name: str,
         window_limits: tuple[int, int],
         callbacks: SessionCallbacks | None = None,
+        blocked_identity_checker: Optional[Callable[[str], bool]] = None,
     ) -> SessionRunner:
         return SessionRunner(
             capture,
@@ -127,6 +149,7 @@ class AttendancePipeline:
             verification_display_callback=callbacks.on_verification_frame if callbacks else None,
             poll_cancel_callback=callbacks.poll_cancel if callbacks else None,
             wait_for_next_callback=callbacks.wait_for_next_person if callbacks else None,
+            blocked_identity_checker=blocked_identity_checker,
         )
 
     def warmup(self, *, width: int, height: int) -> None:
@@ -374,46 +397,7 @@ class AttendancePipeline:
             smoothed_fps = inst_fps if smoothed_fps is None else (0.85 * smoothed_fps + 0.15 * inst_fps)
             prev_t = now_t
 
-            fps_text = f"FPS: {smoothed_fps:5.1f}"
-            x = 20
-            y = 30
-            cv2.putText(annotated, fps_text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            y += 28
-            cv2.putText(
-                annotated,
-                f"Detector: {timings.get('detector_ms', 0.0):.1f} ms",
-                (x, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2,
-            )
-            y += 28
-            cv2.putText(
-                annotated,
-                f"Recogniser: {timings.get('recognition_ms', 0.0):.1f} ms",
-                (x, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2,
-            )
-            if self.spoof_service is not None:
-                y += 28
-                cv2.putText(
-                    annotated,
-                    f"Spoof: {timings.get('spoof_ms', 0.0):.1f} ms",
-                    (x, y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 255),
-                    2,
-                )
-            instruction = "Press ESC or q to quit"
-            (itw, ith), _ = cv2.getTextSize(instruction, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            ix = max(20, (annotated.shape[1] - itw) // 2)
-            iy = annotated.shape[0] - 20
-            cv2.putText(annotated, instruction, (ix, iy), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+            annotated = self._annotate_direct_overlay(annotated, smoothed_fps, timings)
 
             if callbacks and callbacks.on_verification_frame:
                 callbacks.on_verification_frame(annotated.copy())
@@ -444,6 +428,120 @@ class AttendancePipeline:
                     self.power_logger.set_activity("terminating")
                     self._notify_stage("terminating", callbacks)
                     break
+
+    def _annotate_direct_overlay(self, frame: np.ndarray, fps: Optional[float], timings: dict[str, float]) -> np.ndarray:
+        lines: list[str] = []
+        if fps is not None:
+            lines.append(f"FPS: {fps:5.1f}")
+        detector_ms = timings.get("detector_ms")
+        recognition_ms = timings.get("recognition_ms")
+        spoof_ms = timings.get("spoof_ms") if self.spoof_service is not None else None
+        if detector_ms is not None:
+            lines.append(f"Detector: {detector_ms:.1f} ms")
+        if recognition_ms is not None:
+            lines.append(f"Recogniser: {recognition_ms:.1f} ms")
+        if spoof_ms is not None:
+            lines.append(f"Spoof: {spoof_ms:.1f} ms")
+        if not lines:
+            lines.append("Collecting metrics…")
+        hud = draw_text_panel(
+            frame,
+            lines,
+            anchor="top-left",
+            title="Performance",
+            style=DIRECT_METRICS_PANEL,
+        )
+        instruction = "Press ESC or q to quit"
+        hud = draw_center_banner(
+            hud,
+            instruction,
+            position="bottom",
+            style=DIRECT_INSTRUCTION_BANNER,
+        )
+        return hud
+
+    def _summarize_cycle(self, cycle) -> dict[str, object]:
+        summary = aggregate_observations(cycle.observations, spoof_threshold=self.args.spoof_thr)
+        summary["capture_duration"] = cycle.duration
+        return summary
+
+    def _build_log_entry(
+        self,
+        raw_source,
+        summary: dict[str, object],
+        duration: float,
+        timestamp: str,
+    ) -> dict[str, object]:
+        return {
+            "timestamp": timestamp,
+            "source": raw_source,
+            "recognized": summary["recognized"],
+            "identity": summary["identity"],
+            "avg_identity_score": summary["avg_identity_score"],
+            "avg_spoof_score": summary["avg_spoof_score"],
+            "is_real": summary["is_real"],
+            "accepted": summary["accepted"],
+            "frames_with_detections": summary["frames_with_detections"],
+            "capture_duration": duration,
+        }
+
+    def _persist_log_entry(self, entry: dict[str, object]) -> None:
+        append_attendance_log(Path(self.args.attendance_log), entry)
+
+    def _report_summary(self, summary: dict[str, object], timestamp: str, callbacks: SessionCallbacks | None) -> None:
+        status_text = "ACCESS GRANTED" if summary["accepted"] else "ACCESS DENIED"
+        identity = summary["identity"]
+        message = f"[{timestamp}] {status_text}: {identity}"
+        print(message)
+        if callbacks and callbacks.on_status:
+            callbacks.on_status(f"{status_text}: {identity}")
+        self._notify_stage("results", callbacks)
+        score_fragments: list[str] = []
+        if summary.get("avg_identity_score") is not None:
+            score_fragments.append(f"identity={summary['avg_identity_score'] * 100.0:.1f}%")
+        if self.spoof_service is not None and summary.get("avg_spoof_score") is not None:
+            spoof_label = "real"
+            if summary.get("is_real") is False:
+                spoof_label = "spoof"
+            elif summary.get("is_real") is None:
+                spoof_label = "unknown"
+            score_fragments.append(f"spoof={summary['avg_spoof_score'] * 100.0:.1f}% ({spoof_label})")
+        if score_fragments:
+            print("Scores: " + ", ".join(score_fragments))
+        if callbacks and callbacks.on_summary:
+            enriched = summary.copy()
+            enriched["timestamp"] = timestamp
+            callbacks.on_summary(enriched)
+
+    def _resolve_display_frame(
+        self,
+        cycle,
+        capture: cv2.VideoCapture,
+        resolved_width: int,
+        resolved_height: int,
+    ) -> np.ndarray:
+        display_frame = cycle.last_frame
+        if display_frame is None:
+            frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or resolved_height
+            frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or resolved_width
+            display_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+        return display_frame
+
+    @staticmethod
+    def _continue_hint(callbacks: SessionCallbacks | None) -> str:
+        if callbacks and callbacks.wait_for_next_person:
+            return "Click Next Person to continue or Stop Session to exit"
+        return "Press SPACE to continue or ESC to close"
+
+    def _render_final_frame(self, display_frame, summary: dict[str, object], continue_hint: str) -> np.ndarray:
+        return compose_final_display(
+            display_frame,
+            summary,
+            show_spoof_score=self.spoof_service is not None and self.show_summary_scores,
+            show_scores=self.show_summary_scores,
+            minimal_mode=self.minimal_overlay,
+            continue_hint=continue_hint,
+        )
 
     def run_guided_session(
         self,
@@ -476,71 +574,21 @@ class AttendancePipeline:
             self._await_verification_sample()
             self.power_logger.set_activity("processing")
             self._notify_stage("processing", callbacks)
-            summary = aggregate_observations(cycle.observations, spoof_threshold=self.args.spoof_thr)
-            summary["capture_duration"] = cycle.duration
+            summary = self._summarize_cycle(cycle)
             timestamp = datetime.now(timezone.utc).isoformat()
+            log_entry = self._build_log_entry(raw_source, summary, cycle.duration, timestamp)
             self._emit_metrics(callbacks, cycle.metrics)
+            self._persist_log_entry(log_entry)
+            self._report_summary(summary, timestamp, callbacks)
 
-            log_entry = {
-                "timestamp": timestamp,
-                "source": raw_source,
-                "recognized": summary["recognized"],
-                "identity": summary["identity"],
-                "avg_identity_score": summary["avg_identity_score"],
-                "avg_spoof_score": summary["avg_spoof_score"],
-                "is_real": summary["is_real"],
-                "accepted": summary["accepted"],
-                "frames_with_detections": summary["frames_with_detections"],
-                "capture_duration": summary.get("capture_duration"),
-            }
-            append_attendance_log(Path(self.args.attendance_log), log_entry)
-
-            display_frame = cycle.last_frame
-            if display_frame is None:
-                frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) or resolved_height
-                frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) or resolved_width
-                display_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
-
-            if callbacks and callbacks.wait_for_next_person:
-                continue_hint = "Click Next Person to continue or Stop Session to exit"
-            else:
-                continue_hint = "Press SPACE to continue or ESC to close"
-            final_display = compose_final_display(
-                display_frame,
-                summary,
-                show_spoof_score=self.spoof_service is not None and self.show_summary_scores,
-                show_scores=self.show_summary_scores,
-                minimal_mode=self.minimal_overlay,
-                continue_hint=continue_hint,
-            )
-            annotated_final = self._annotate_metrics(final_display, cycle.metrics)
+            display_frame = self._resolve_display_frame(cycle, capture, resolved_width, resolved_height)
+            continue_hint = self._continue_hint(callbacks)
+            final_display = self._render_final_frame(display_frame, summary, continue_hint)
+            annotated_final = final_display
             if callbacks and callbacks.on_final_frame:
                 callbacks.on_final_frame(annotated_final)
             else:
                 cv2.imshow(window_name, annotated_final)
-
-            status_text = "ACCESS GRANTED" if summary["accepted"] else "ACCESS DENIED"
-            message = f"[{timestamp}] {status_text}: {summary['identity']}"
-            print(message)
-            if callbacks and callbacks.on_status:
-                callbacks.on_status(f"{status_text}: {summary['identity']}")
-            self._notify_stage("results", callbacks)
-            score_fragments: list[str] = []
-            if summary.get("avg_identity_score") is not None:
-                score_fragments.append(f"identity={summary['avg_identity_score'] * 100.0:.1f}%")
-            if self.spoof_service is not None and summary.get("avg_spoof_score") is not None:
-                spoof_label = "real"
-                if summary.get("is_real") is False:
-                    spoof_label = "spoof"
-                elif summary.get("is_real") is None:
-                    spoof_label = "unknown"
-                score_fragments.append(f"spoof={summary['avg_spoof_score'] * 100.0:.1f}% ({spoof_label})")
-            if score_fragments:
-                print("Scores: " + ", ".join(score_fragments))
-            if callbacks and callbacks.on_summary:
-                enriched = summary.copy()
-                enriched["timestamp"] = timestamp
-                callbacks.on_summary(enriched)
             self.power_logger.set_activity("waiting")
 
             self._notify_stage("waiting", callbacks)
@@ -575,19 +623,17 @@ class AttendancePipeline:
     def _notify_stage(stage: str, callbacks: SessionCallbacks | None) -> None:
         if callbacks is None or callbacks.on_stage_change is None:
             return
-        callbacks.on_stage_change(stage)
+        if stage:
+            formatted = stage[0].upper() + stage[1:]
+        else:
+            formatted = stage
+        callbacks.on_stage_change(formatted)
 
     @staticmethod
     def _emit_metrics(callbacks: SessionCallbacks | None, metrics: Optional[dict[str, float]]) -> None:
         if callbacks is None or callbacks.on_metrics is None or not metrics:
             return
         callbacks.on_metrics(metrics)
-
-    @staticmethod
-    def _annotate_metrics(frame: np.ndarray, metrics: Optional[dict[str, float]]) -> np.ndarray:
-        # CLI mode no longer annotates metrics directly; return frame unchanged.
-        return frame
-
 
 __all__ = [
     "AttendancePipeline",

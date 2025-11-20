@@ -1,0 +1,3 @@
+timestamp,identity,result,source,recognized,avg_identity_score,avg_spoof_score,is_real,accepted,frames_with_detections,capture_duration
+2025-11-20T00:37:28.900709+00:00,Faisal,Accepted,0,True,1.0,0.9551719493336148,True,True,9,1.0563374999910593
+2025-11-20T01:26:46.907670+00:00,Abdulrhman,Rejected,0,True,1.0,0.8451707303524018,False,False,10,1.0595527999976184

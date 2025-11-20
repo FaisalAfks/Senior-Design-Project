@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import tkinter as tk
+from tkinter import ttk
+
 from utils.overlay import PanelStyle
 
 
@@ -110,6 +113,73 @@ def _sanitize_identity_name(name: str) -> str:
     return safe or "person"
 
 
+def center_window(parent: tk.Misc, window: tk.Toplevel) -> None:
+    window.update_idletasks()
+    parent_x = parent.winfo_rootx()
+    parent_y = parent.winfo_rooty()
+    parent_w = parent.winfo_width()
+    parent_h = parent.winfo_height()
+    win_w = window.winfo_width()
+    win_h = window.winfo_height()
+    x = parent_x + (parent_w // 2) - (win_w // 2)
+    y = parent_y + (parent_h // 2) - (win_h // 2)
+    window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+
+def select_log_dialog(
+    parent: tk.Misc,
+    theme,
+    pages: list[dict[str, object]],
+    current_index: int,
+) -> Optional[str]:
+    dialog = tk.Toplevel(parent)
+    dialog.title("Resume Session")
+    dialog.transient(parent)
+    dialog.grab_set()
+    dialog.geometry("420x320")
+    dialog.update_idletasks()
+    center_window(parent, dialog)
+    ttk.Label(dialog, text="Select a log to resume:", font=theme.font("heading")).grid(
+        row=0,
+        column=0,
+        columnspan=2,
+        sticky="w",
+        padx=16,
+        pady=(16, 8),
+    )
+    listbox = tk.Listbox(dialog, height=min(12, len(pages)), exportselection=False)
+    listbox.grid(row=1, column=0, columnspan=2, padx=16, sticky="nsew")
+    dialog.columnconfigure(0, weight=1)
+    dialog.rowconfigure(1, weight=1)
+    for idx, page in enumerate(pages):
+        entry_count = int(page.get("entry_count") or 0)
+        created = page.get("created_at", "")[:16]
+        label = f"{page['name']}  ({entry_count} entries, {created})"
+        listbox.insert("end", label)
+    if 0 <= current_index < len(pages):
+        listbox.selection_set(current_index)
+        listbox.see(current_index)
+    selection: dict[str, Optional[str]] = {"value": None}
+
+    def confirm(event=None):
+        chosen = listbox.curselection()
+        if not chosen:
+            return
+        selection["value"] = pages[chosen[0]]["id"]
+        dialog.destroy()
+
+    def cancel() -> None:
+        selection["value"] = None
+        dialog.destroy()
+
+    listbox.bind("<Double-Button-1>", confirm)
+    ttk.Button(dialog, text="Cancel", command=cancel).grid(row=2, column=0, pady=16, padx=16, sticky="w")
+    ttk.Button(dialog, text="Resume", command=confirm).grid(row=2, column=1, pady=16, padx=16, sticky="e")
+    dialog.protocol("WM_DELETE_WINDOW", cancel)
+    parent.wait_window(dialog)
+    return selection["value"]
+
+
 __all__ = [
     "_resolve_source",
     "_format_display_timestamp",
@@ -124,4 +194,6 @@ __all__ = [
     "LIVE_FEED_SIZE",
     "UI_PAD",
     "METRICS_PANEL_STYLE",
+    "center_window",
+    "select_log_dialog",
 ]

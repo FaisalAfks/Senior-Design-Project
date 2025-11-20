@@ -19,6 +19,7 @@ class AttendanceSessionController:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._error_handler: Optional[Callable[[BaseException], None]] = None
+        self._blocked_identity_checker: Optional[Callable[[str], bool]] = None
 
     def start(self, callbacks: SessionCallbacks, *, on_error: Optional[Callable[[BaseException], None]] = None) -> None:
         if self._thread and self._thread.is_alive():
@@ -34,6 +35,7 @@ class AttendanceSessionController:
             window_name="Dashboard Session",
             window_limits=(self.capture_context.display_width, self.capture_context.display_height),
             callbacks=merged_callbacks,
+            blocked_identity_checker=self._blocked_identity_checker,
         )
         self._thread = threading.Thread(target=self._run_session, args=(merged_callbacks,), daemon=True)
         self._thread.start()
@@ -113,6 +115,9 @@ class AttendanceSessionController:
         self.config.display_scores = value
         if self.pipeline is not None:
             self.pipeline.show_summary_scores = value
+
+    def set_blocked_identity_checker(self, checker: Optional[Callable[[str], bool]]) -> None:
+        self._blocked_identity_checker = checker
 
     def refresh_facebank(self) -> bool:
         pipeline = self.pipeline

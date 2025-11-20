@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Modernised attendance demo app with a dashboard-style layout."""
 import atexit
-import csv
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,10 +19,7 @@ from pipelines.attendance import (
 from dashboard.configuration import (
     DemoConfig,
 )
-from dashboard.utils import (
-    METRICS_PANEL_STYLE,
-    _sanitize_identity_name,
-)
+from dashboard.utils import select_log_dialog, METRICS_PANEL_STYLE, _sanitize_identity_name
 from dashboard.controllers import AttendanceSessionController, RegistrationSession
 from dashboard.services import AttendanceLogBook
 from dashboard.services.errors import format_exception, show_error_dialog
@@ -47,8 +43,8 @@ from utils.logging import CSV_FIELDS
 SETTINGS_PATH = Path("app_settings.json")
 
 
-DASHBOARD_EXPORT_DIR = logs_path("dashboard_runs")
-LOG_BOOK_PATH = logs_path("dashboard_logbook.json")
+EXPORTS_DIR = logs_path("exports")
+LOG_BOOK_PATH = logs_path("logbook.json")
 
 class DashboardApp:
     def __init__(self) -> None:
@@ -170,11 +166,13 @@ class DashboardApp:
         self._display_scores = self.control_panel.display_scores_var.get()
         self._session_active = False
         self._session_identities: set[str] = set()
+        self._spoof_attempts: dict[str, int] = {}
+        self._blocked_identities: set[str] = set()
+        self._max_spoof_attempts = 3
         self._next_person_event = threading.Event()
         self._awaiting_next = False
         self.registration_session: Optional[RegistrationSession] = None
         self._session_button_mode = "start"
-        self._failed_entries_by_log: dict[str, dict[str, dict[str, object]]] = {}
         self._set_start_button_mode("start")
         self._initialize_logbook_state()
 
@@ -251,15 +249,13 @@ class DashboardApp:
         else:
             self._current_log_id = None
         self._active_log_id = None
-        if self._current_log_id is not None:
-            self._failed_entries_by_log.setdefault(self._current_log_id, {})
         self._refresh_log_display()
 
     def _refresh_log_display(self) -> None:
         if self._current_log_id is None:
             self.log_panel.clear_entries()
         else:
-            entries = self.log_book.entries_for(self._current_log_id)
+            entries = self.log_book.combined_entries(self._current_log_id)
             self.log_panel.load_entries(entries)
         self.log_panel.set_title(self._format_log_label())
         self._update_log_nav_state()
@@ -286,67 +282,6 @@ class DashboardApp:
         self.log_panel.set_prev_enabled(not (len(pages) <= 1 or index <= 0))
         self.log_panel.set_next_enabled(not (len(pages) <= 1 or index in (-1, len(pages) - 1)))
 
-    def _select_log_dialog(self, pages: list[dict[str, object]], current_index: int) -> Optional[str]:
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Resume Session")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.geometry("420x320")
-        dialog.update_idletasks()
-        self._center_window(dialog)
-        ttk.Label(dialog, text="Select a log to resume:", font=self.theme.font("heading")).grid(
-            row=0,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            padx=16,
-            pady=(16, 8),
-        )
-        listbox = tk.Listbox(dialog, height=min(12, len(pages)), exportselection=False)
-        listbox.grid(row=1, column=0, columnspan=2, padx=16, sticky="nsew")
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(1, weight=1)
-        for idx, page in enumerate(pages):
-            entry_count = int(page.get("entry_count") or 0)
-            created = page.get("created_at", "")[:16]
-            label = f"{page['name']}  ({entry_count} entries, {created})"
-            listbox.insert("end", label)
-        if 0 <= current_index < len(pages):
-            listbox.selection_set(current_index)
-            listbox.see(current_index)
-        selection: dict[str, Optional[str]] = {"value": None}
-
-        def confirm(event=None):
-            chosen = listbox.curselection()
-            if not chosen:
-                return
-            selection["value"] = pages[chosen[0]]["id"]
-            dialog.destroy()
-
-        def cancel() -> None:
-            selection["value"] = None
-            dialog.destroy()
-
-        listbox.bind("<Double-Button-1>", confirm)
-        ttk.Button(dialog, text="Cancel", command=cancel).grid(row=2, column=0, pady=16, padx=16, sticky="w")
-        ttk.Button(dialog, text="Resume", command=confirm).grid(row=2, column=1, pady=16, padx=16, sticky="e")
-        dialog.protocol("WM_DELETE_WINDOW", cancel)
-        self.root.wait_window(dialog)
-        return selection["value"]
-
-    def _center_window(self, window: tk.Toplevel) -> None:
-        window.update_idletasks()
-        parent = self.root
-        parent_x = parent.winfo_rootx()
-        parent_y = parent.winfo_rooty()
-        parent_w = parent.winfo_width()
-        parent_h = parent.winfo_height()
-        win_w = window.winfo_width()
-        win_h = window.winfo_height()
-        x = parent_x + (parent_w // 2) - (win_w // 2)
-        y = parent_y + (parent_h // 2) - (win_h // 2)
-        window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-
     def _set_current_log(self, page_id: Optional[str]) -> None:
         if not page_id:
             return
@@ -354,7 +289,6 @@ class DashboardApp:
             return
         self._current_log_id = page_id
         self.log_book.set_selected_page(page_id)
-        self._ensure_log_bucket(page_id)
         self._refresh_log_display()
 
     def _select_prev_log(self) -> None:
@@ -372,11 +306,6 @@ class DashboardApp:
     def _generate_default_log_name(self) -> str:
         return datetime.now().strftime("Session %Y-%m-%d %H:%M")
 
-    def _ensure_log_bucket(self, log_id: str) -> dict[str, dict[str, object]]:
-        return self._failed_entries_by_log.setdefault(log_id, {})
-
-    def _failure_key(self, identity: str, source: str) -> str:
-        return f"{identity}::{source}"
 
     def _require_active_log_id(self) -> str:
         target_page_id = self._active_log_id or self._current_log_id
@@ -385,7 +314,6 @@ class DashboardApp:
             target_page_id = fallback_page["id"]
             self._active_log_id = target_page_id
             self._set_current_log(target_page_id)
-        self._ensure_log_bucket(target_page_id)
         return target_page_id
 
     def _create_log(self) -> None:
@@ -401,7 +329,6 @@ class DashboardApp:
         final_name = name.strip() or suggested
         page = self.log_book.create_page(final_name)
         self._set_current_log(page["id"])
-        self._ensure_log_bucket(page["id"])
         self.status_panel.set_status(f"Created log '{final_name}'.")
 
     def _rename_log(self) -> None:
@@ -433,7 +360,7 @@ class DashboardApp:
             messagebox.showinfo("Resume session", "No logs available to resume.", parent=self.root)
             return
         current_index = self.log_book.page_index(self._current_log_id)
-        selection = self._select_log_dialog(pages, current_index)
+        selection = select_log_dialog(self.root, self.theme, pages, current_index)
         if selection is None:
             return
         page = self.log_book.get_page(selection)
@@ -445,7 +372,6 @@ class DashboardApp:
             return
         self._next_session_log_id = page["id"]
         self._set_current_log(page["id"])
-        self._ensure_log_bucket(page["id"])
         self.status_panel.set_status(f"Next session will resume '{page['name']}'.")
         self._refresh_log_display()
 
@@ -455,7 +381,6 @@ class DashboardApp:
             if page is not None:
                 self._active_log_id = page["id"]
                 self._set_current_log(page["id"])
-                self._ensure_log_bucket(page["id"])
                 self.status_panel.set_status(f"Resuming log '{page['name']}'.")
                 self._next_session_log_id = None
                 return True
@@ -477,7 +402,6 @@ class DashboardApp:
         page = self.log_book.create_page(final_name)
         self._active_log_id = page["id"]
         self._set_current_log(page["id"])
-        self._ensure_log_bucket(page["id"])
         self.status_panel.set_status(f"Logging session '{final_name}'.")
         return True
 
@@ -492,6 +416,15 @@ class DashboardApp:
             identity = entry.get("identity")
             if entry.get("accepted") and identity and identity != "Unknown":
                 self._session_identities.add(str(identity))
+
+    def _reset_spoof_tracking(self) -> None:
+        self._spoof_attempts.clear()
+        self._blocked_identities.clear()
+
+    def _is_identity_blocked(self, identity: str) -> bool:
+        if not identity:
+            return False
+        return identity in self._blocked_identities
 
     def _delete_log(self) -> None:
         page = self.log_book.get_page(self._current_log_id)
@@ -510,7 +443,6 @@ class DashboardApp:
             return
         index = self.log_book.page_index(page["id"])
         self.log_book.delete_page(page["id"])
-        self._failed_entries_by_log.pop(page["id"], None)
         if self._next_session_log_id == page["id"]:
             self._next_session_log_id = None
         if self._active_log_id == page["id"]:
@@ -558,13 +490,16 @@ class DashboardApp:
             self.controller = controller
         else:
             controller.config = config
+        controller.set_blocked_identity_checker(self._is_identity_blocked)
         self._show_metrics_overlay = config.show_metrics
         self._display_scores = config.display_scores
         self._seed_session_identities()
+        self._reset_spoof_tracking()
         self._next_person_event = threading.Event()
         self._awaiting_next = False
         self._session_active = True
         self._update_facebank_panel_busy_state()
+        self.log_panel.set_title(self._format_log_label())
         self._set_start_button_mode("disabled")
         self.session_buttons.set_pause_enabled(True)
         self._show_session_controls()
@@ -621,9 +556,11 @@ class DashboardApp:
         self._set_start_button_mode("start")
         self._clear_metrics_overlay()
         self._session_identities.clear()
+        self._reset_spoof_tracking()
         self._update_facebank_panel_busy_state()
         keep_ids = {pid for pid in (self._current_log_id, self._active_log_id) if pid}
         self.log_book.release_entries(keep=keep_ids or None)
+        self.log_panel.set_title(self._format_log_label())
 
     def _handle_session_error(self, exc: BaseException) -> None:
         self.root.after(0, lambda: self._report_session_error(exc))
@@ -649,9 +586,31 @@ class DashboardApp:
         timestamp = summary.get("timestamp") or datetime.now(timezone.utc).isoformat(timespec="seconds")
         identity = summary.get("identity") or "Unknown"
         accepted = bool(summary.get("accepted"))
+        blocked = bool(summary.get("blocked"))
+        is_real = summary.get("is_real")
+        recognized = bool(summary.get("recognized"))
         source = summary.get("source") or self.control_panel.source_var.get()
-        duplicate = accepted and identity != "Unknown" and identity in self._session_identities
-        if accepted and not duplicate and identity != "Unknown":
+        attempts = self._spoof_attempts.get(identity, 0)
+        if accepted:
+            self._spoof_attempts.pop(identity, None)
+            self._blocked_identities.discard(identity)
+            attempts = 0
+        elif (
+            identity != "Unknown"
+            and recognized
+            and is_real is False
+            and not blocked
+        ):
+            attempts = self._spoof_attempts.get(identity, 0) + 1
+            self._spoof_attempts[identity] = attempts
+            if attempts >= self._max_spoof_attempts:
+                self._blocked_identities.add(identity)
+                blocked = True
+        elif blocked:
+            attempts = max(attempts, self._max_spoof_attempts)
+        identity_has_accept = identity != "Unknown" and identity in self._session_identities
+        duplicate = accepted and identity_has_accept
+        if accepted and not identity_has_accept and identity != "Unknown":
             self._session_identities.add(identity)
         if not duplicate:
             entry = dict(summary)
@@ -661,30 +620,44 @@ class DashboardApp:
                     "identity": identity,
                     "accepted": accepted,
                     "source": str(source),
+                    "blocked": blocked,
                 }
             )
+            target_page_id = self._require_active_log_id()
             if accepted:
-                target_page_id = self._require_active_log_id()
                 self.log_book.add_entry(target_page_id, entry)
+                removed_failure = self.log_book.remove_rejection(target_page_id, identity, str(source))
                 if self._current_log_id == target_page_id:
-                    self.log_panel.add_entry(
-                        timestamp=str(entry.get("timestamp", "")),
-                        identity=str(entry.get("identity", "")),
-                        accepted=True,
-                        source=str(entry.get("source", "")),
-                    )
-                failures = self._failed_entries_by_log.get(target_page_id)
-                if failures:
-                    failures.pop(self._failure_key(identity, str(source)), None)
+                    if removed_failure:
+                        self._refresh_log_display()
+                    else:
+                        self.log_panel.add_entry(
+                            timestamp=str(entry.get("timestamp", "")),
+                            identity=str(entry.get("identity", "")),
+                            accepted=True,
+                            source=str(entry.get("source", "")),
+                        )
             else:
-                target_page_id = self._require_active_log_id()
-                failures = self._ensure_log_bucket(target_page_id)
-                failures[self._failure_key(identity, str(source))] = entry
+                if identity_has_accept:
+                    removed_failure = self.log_book.remove_rejection(target_page_id, identity, str(source))
+                    if removed_failure and self._current_log_id == target_page_id:
+                        self._refresh_log_display()
+                else:
+                    self.log_book.upsert_rejection(target_page_id, entry)
+                    if self._current_log_id == target_page_id:
+                        self._refresh_log_display()
         result_text: str
         if duplicate:
             result_text = f"{identity}: Already attended"
+        elif not accepted and identity_has_accept:
+            result_text = f"{identity}: Already attended"
+        elif blocked and identity != "Unknown":
+            result_text = f"{identity}: Blocked after {self._max_spoof_attempts} spoof attempts"
         elif accepted:
             result_text = f"{identity}: Attended"
+        elif identity != "Unknown" and recognized and is_real is False:
+            progress = f" ({attempts}/{self._max_spoof_attempts})" if attempts else ""
+            result_text = f"{identity}: Spoof detected{progress}"
         else:
             result_text = f"{identity}: Try again"
         self.status_panel.set_status(result_text)
@@ -886,42 +859,25 @@ class DashboardApp:
             messagebox.showinfo("Export attendance", "Select a log to export.", parent=self.root)
             return
         page_id = page["id"]
-        success_entries = list(self.log_book.entries_for(page_id))
-        failure_entries = list(self._failed_entries_by_log.get(page_id, {}).values())
-        combined_entries = success_entries + failure_entries
-        if not combined_entries:
-            messagebox.showinfo("Export attendance", "No entries to export for this log.", parent=self.root)
-            return
-        export_dir = DASHBOARD_EXPORT_DIR
+        detail_fields = [field for field in CSV_FIELDS if field not in ("timestamp", "identity", "source")]
+        export_dir = EXPORTS_DIR
         export_dir.mkdir(parents=True, exist_ok=True)
         page_slug = _sanitize_identity_name(page["name"])
         date_stamp = datetime.now().strftime("%Y%m%d")
         export_path = export_dir / f"{page_slug}_{date_stamp}.csv"
         try:
-            export_path.parent.mkdir(parents=True, exist_ok=True)
-            detail_fields = [field for field in CSV_FIELDS if field not in ("timestamp", "identity", "source")]
-            header = ["timestamp", "identity", "result", "source", *detail_fields]
-            with export_path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerow(header)
-                ordered_entries = sorted(
-                    combined_entries,
-                    key=lambda item: str(item.get("timestamp", "")),
-                )
-                for entry in ordered_entries:
-                    result = "Accepted" if entry.get("accepted") else "Rejected"
-                    row_values = [
-                        entry.get("timestamp", ""),
-                        entry.get("identity", ""),
-                        result,
-                        entry.get("source", ""),
-                    ]
-                    for field in detail_fields:
-                        row_values.append(entry.get(field, ""))
-                    writer.writerow(row_values)
-            messagebox.showinfo("Export attendance", f"CSV for '{page['name']}' written to {export_path}", parent=self.root)
+            success = self.log_book.export_page_to_csv(
+                page_id,
+                export_path,
+                detail_fields=detail_fields,
+            )
         except Exception as exc:
             show_error_dialog("Export failed", f"Unable to export log: {exc}", parent=self.root)
+            return
+        if not success:
+            messagebox.showinfo("Export attendance", "No entries to export for this log.", parent=self.root)
+            return
+        messagebox.showinfo("Export attendance", f"CSV for '{page['name']}' written to {export_path}", parent=self.root)
 
     def _refresh_facebank(self) -> None:
         if getattr(self, "facebank_panel", None) is not None:

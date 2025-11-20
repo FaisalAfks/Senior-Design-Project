@@ -6,12 +6,14 @@ from typing import Optional
 
 import tkinter as tk
 from tkinter import ttk
+from tkinter import font as tkfont
 
+from dashboard.theme import ThemeManager
 from dashboard.utils import _format_display_timestamp
 
 
 class AttendanceLog(ttk.Frame):
-    def __init__(self, master: tk.Misc) -> None:
+    def __init__(self, master: tk.Misc, *, theme: Optional[ThemeManager] = None) -> None:
         super().__init__(master)
         columns = ("timestamp", "identity", "result", "source")
         self._columns = columns
@@ -23,10 +25,18 @@ class AttendanceLog(ttk.Frame):
         }
         self._sort_column: Optional[str] = None
         self._sort_descending = False
+        self._theme = theme
+        self._tree_style = "Logbook.Treeview"
+        self._heading_style = f"{self._tree_style}.Heading"
+        self._apply_row_style()
 
-        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=10)
+        self.tree = ttk.Treeview(self, columns=columns, show="headings", height=10, style=self._tree_style)
         for col in columns:
-            self.tree.heading(col, text=self._heading_labels[col], command=lambda c=col: self._sort_tree(c))
+            self.tree.heading(
+                col,
+                text=self._heading_labels[col],
+                command=lambda c=col: self._sort_tree(c),
+            )
             self.tree.column(col, anchor="w")
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -125,3 +135,19 @@ class AttendanceLog(ttk.Frame):
                 arrow = "▼" if self._sort_descending else "▲"
                 label = f"{label} {arrow}"
             self.tree.heading(col, text=label)
+
+    def _apply_row_style(self) -> None:
+        style = ttk.Style(self)
+        base_font = self._theme.font("label") if self._theme else None
+        heading_font = self._theme.font("label-bold") if self._theme else None
+        row_height = 28
+        if base_font:
+            tk_font = tkfont.Font(master=self, font=base_font)
+            row_height = max(int(tk_font.metrics("linespace") + 8), row_height)
+            style.configure(self._tree_style, font=base_font, rowheight=row_height, padding=(0, 4))
+        else:
+            style.configure(self._tree_style, rowheight=row_height, padding=(0, 4))
+        if heading_font:
+            style.configure(self._heading_style, font=heading_font, padding=(8, 6))
+        else:
+            style.configure(self._heading_style, padding=(8, 6))

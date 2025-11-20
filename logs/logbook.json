@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "selected_page_id": "17bbf31268e748448440f482dec34460",
+  "pages": [
+    {
+      "id": "22d6d96ed5564080b10efb794be04cd8",
+      "name": "Jetson",
+      "created_at": "2025-11-15T11:58:57+00:00",
+      "updated_at": "2025-11-20T00:38:30+00:00",
+      "entry_count": 2,
+      "entries": [
+        {
+          "frames_with_detections": 2,
+          "recognized": true,
+          "identity": "Sultan",
+          "avg_identity_score": 0.9175179600715637,
+          "avg_spoof_score": 0.9488946199417114,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 1.4323814239978674,
+          "timestamp": "2025-11-15T21:01:21.645400+00:00",
+          "source": "0"
+        },
+        {
+          "frames_with_detections": 3,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9462538957595825,
+          "is_real": true,
+          "accepted": true,
+          "capture_duration": 1.218539279999277,
+          "timestamp": "2025-11-15T12:03:41.271008+00:00",
+          "source": "0"
+        }
+      ],
+      "rejections": [
+        {
+          "frames_with_detections": 9,
+          "recognized": true,
+          "identity": "Abdulrhman",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.7877765231662326,
+          "is_real": false,
+          "accepted": false,
+          "blocked": false,
+          "capture_duration": 1.0606039999984205,
+          "timestamp": "2025-11-20T00:38:30.737703+00:00",
+          "source": "0"
+        }
+      ]
+    },
+    {
+      "id": "17bbf31268e748448440f482dec34460",
+      "name": "Session",
+      "created_at": "2025-11-20T00:36:08+00:00",
+      "updated_at": "2025-11-20T01:26:46+00:00",
+      "entry_count": 1,
+      "entries": [
+        {
+          "frames_with_detections": 9,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9551719493336148,
+          "is_real": true,
+          "accepted": true,
+          "blocked": false,
+          "capture_duration": 1.0563374999910593,
+          "timestamp": "2025-11-20T00:37:28.900709+00:00",
+          "source": "0"
+        }
+      ],
+      "rejections": [
+        {
+          "frames_with_detections": 10,
+          "recognized": true,
+          "identity": "Abdulrhman",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.8451707303524018,
+          "is_real": false,
+          "accepted": false,
+          "blocked": false,
+          "capture_duration": 1.0595527999976184,
+          "timestamp": "2025-11-20T01:26:46.907670+00:00",
+          "source": "0"
+        }
+      ]
+    },
+    {
+      "id": "af9c29d03a8c4a68b32d631ff4de2c1d",
+      "name": "Session 3",
+      "created_at": "2025-11-20T01:31:23+00:00",
+      "updated_at": "2025-11-20T01:31:48+00:00",
+      "entry_count": 1,
+      "entries": [
+        {
+          "frames_with_detections": 9,
+          "recognized": true,
+          "identity": "Faisal",
+          "avg_identity_score": 1.0,
+          "avg_spoof_score": 0.9637730055385165,
+          "is_real": true,
+          "accepted": true,
+          "blocked": false,
+          "capture_duration": 1.1190720000013243,
+          "timestamp": "2025-11-20T01:31:48.972587+00:00",
+          "source": "0"
+        }
+      ],
+      "rejections": []
+    }
+  ]
+}
