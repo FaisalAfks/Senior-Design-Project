@@ -1,9 +1,9 @@
-Senior Design Project — Face Verification System
+Senior Design Project — Robust, Low-Power Facial Recognition with Anti-Spoofing Measures
 ================================================
 
 Overview
 --------
-This project implements a real‑time face verification workflow with optional on‑screen alignment guidance, identity recognition, and anti‑spoofing. It targets both standard desktops (CPU/GPU) and NVIDIA Jetson (Orin Nano et al.) devices.
+This project implements a real‑time face recognition workflow with optional on‑screen alignment guidance, identity recognition, and anti‑spoofing. It targets both standard desktops (CPU/GPU) and NVIDIA Jetson (Orin Nano et al.) devices.
 
 Key Features
 ------------
