@@ -1,4 +1,4 @@
-Senior Design Project — Face Verification System
+Senior Design Project — Robust, Low-Power Facial Recognition with Anti-Spoofing Measures
 ================================================
 
 Overview
